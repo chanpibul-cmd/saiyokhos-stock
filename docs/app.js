@@ -2155,17 +2155,21 @@ async function loadDashboardBuy() {
     return;
   }
 
-  const { filter, kpis, monthly_trend = [], categories = [], top_shops = [], top_items = [] } = res.data;
+  const { filter, date_range, kpis, monthly_trend = [], categories = [], top_shops = [], top_items = [] } = res.data;
 
   // Period display
-  if (filter) {
+  const f = filter || date_range;
+  if (f) {
     const pEl = document.getElementById('dash-buy-period-display');
-    if (pEl) pEl.textContent = `${filter.start_date} ถึง ${filter.end_date}`;
+    const s = f.start_date || f.startDate || '';
+    const e = f.end_date || f.endDate || '';
+    if (pEl) pEl.textContent = `${s} ถึง ${e}`;
   }
 
   // KPIs
   if (kpis) {
-    document.getElementById('dash-buy-kpi-val').textContent = `${Number(kpis.total_value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บ.`;
+    const totalVal = kpis.total_val ?? kpis.total_value ?? 0;
+    document.getElementById('dash-buy-kpi-val').textContent = `${Number(totalVal).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บ.`;
     document.getElementById('dash-buy-kpi-items').textContent = Number(kpis.total_items || 0).toLocaleString();
     document.getElementById('dash-buy-kpi-docs').textContent = Number(kpis.total_docs || 0).toLocaleString();
     document.getElementById('dash-buy-kpi-shops').textContent = Number(kpis.total_shops || 0).toLocaleString();
@@ -2284,17 +2288,21 @@ async function loadDashboardPay() {
     return;
   }
 
-  const { filter, kpis, monthly_trend = [], departments = [], categories = [], top_items = [] } = res.data;
+  const { filter, date_range, kpis, monthly_trend = [], departments = [], categories = [], top_items = [] } = res.data;
 
   // Period display
-  if (filter) {
+  const f = filter || date_range;
+  if (f) {
     const pEl = document.getElementById('dash-pay-period-display');
-    if (pEl) pEl.textContent = `${filter.start_date} ถึง ${filter.end_date}`;
+    const s = f.start_date || f.startDate || '';
+    const e = f.end_date || f.endDate || '';
+    if (pEl) pEl.textContent = `${s} ถึง ${e}`;
   }
 
   // KPIs
   if (kpis) {
-    document.getElementById('dash-pay-kpi-val').textContent = `${Number(kpis.total_value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บ.`;
+    const totalVal = kpis.total_val ?? kpis.total_value ?? 0;
+    document.getElementById('dash-pay-kpi-val').textContent = `${Number(totalVal).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บ.`;
     document.getElementById('dash-pay-kpi-items').textContent = Number(kpis.total_items || 0).toLocaleString();
     document.getElementById('dash-pay-kpi-docs').textContent = Number(kpis.total_docs || 0).toLocaleString();
     document.getElementById('dash-pay-kpi-depts').textContent = Number(kpis.total_departments || 0).toLocaleString();
@@ -2373,13 +2381,14 @@ function renderDashboardTrendChart(containerId, monthlyData = [], colorTheme = '
   container.innerHTML = monthlyData.map(item => {
     const val = Number(item.total_val) || 0;
     const heightPercent = Math.max(Math.round((val / maxVal) * 100), 4);
-    const shortLabel = item.ym ? item.ym.slice(2) : '-'; // '26-01'
+    const monthKey = item.month || item.ym || '';
+    const shortLabel = monthKey.length >= 5 ? monthKey.slice(2) : (monthKey || '-');
 
     return `
       <div class="flex-1 flex flex-col items-center justify-end h-44 group relative min-w-[36px]">
         <!-- Value Tooltip -->
         <div class="opacity-0 group-hover:opacity-100 transition absolute -top-8 bg-slate-900 text-white text-[10px] py-1 px-2 rounded shadow whitespace-nowrap z-20 pointer-events-none">
-          ${item.ym}: ${val.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บ. (${item.doc_count || 0} บิล)
+          ${monthKey}: ${val.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บ. (${item.doc_count || 0} บิล)
         </div>
         <!-- Bar Value -->
         <span class="text-[9px] font-mono text-slate-500 mb-1 group-hover:font-bold truncate max-w-full">
