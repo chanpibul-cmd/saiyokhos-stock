@@ -1,0 +1,1144 @@
+/**
+ * โรงพยาบาลไทรโยค (Sai Yok Hospital)
+ * ระบบบริหารคลังและสต๊อกพัสดุ - Cloudflare Workers Backend REST API
+ * 
+ * Features:
+ * - Native Web Crypto API for SHA-256 & Stateless JWT (HMAC-SHA256)
+ * - Complete CORS Support for GitHub Pages & Local Development
+ * - Public & Authenticated Endpoints with Page-Level Permission Matrix
+ * - Strict Stock Negative Prevention Logic on Dispatches (Pays)
+ * - Real-Time Stock Card & Running Balance Engine
+ * - Superadmin User & Permission Management
+ */
+
+// JWT Secret Key (Override with env.JWT_SECRET in Cloudflare Dashboard / wrangler.toml)
+const DEFAULT_JWT_SECRET = "SaiYokHospital_StockManagement_Secret_2024_Key!#";
+
+// รายชื่อ page_key ทั้งหมด 7 หน้าตามข้อกำหนดระบบ
+const ALL_PAGE_KEYS = [
+  'stock_balance',
+  'buy',
+  'pay',
+  'items',
+  'shops',
+  'reports',
+  'user_mgmt'
+];
+
+// ============================================================================
+// 1. Utility Functions & Web Crypto Helpers
+// ============================================================================
+
+/**
+ * คำนวณ SHA-256 Hex Hash สำหรับรหัสผ่าน
+ */
+async function sha256Hex(message) {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Base64URL Encoding & Decoding
+ */
+function base64UrlEncode(str) {
+  const base64 = btoa(unescape(encodeURIComponent(str)));
+  return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function base64UrlDecode(str) {
+  let base64 = str.replace(/-/g, "+").replace(/_/g, "/");
+  while (base64.length % 4) {
+    base64 += "=";
+  }
+  return decodeURIComponent(escape(atob(base64)));
+}
+
+/**
+ * สร้าง Stateless JWT Token ด้วย HMAC-SHA256 (Web Crypto API)
+ */
+async function signJwt(payload, secretKey) {
+  const header = { alg: "HS256", typ: "JWT" };
+  const encodedHeader = base64UrlEncode(JSON.stringify(header));
+  const encodedPayload = base64UrlEncode(JSON.stringify(payload));
+  const dataToSign = `${encodedHeader}.${encodedPayload}`;
+
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secretKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const signature = await crypto.subtle.sign("HMAC", key, enc.encode(dataToSign));
+  const sigArray = Array.from(new Uint8Array(signature));
+  const sigBase64 = btoa(String.fromCharCode(...sigArray))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+
+  return `${dataToSign}.${sigBase64}`;
+}
+
+/**
+ * ตรวจสอบความถูกต้องของ JWT Token
+ */
+async function verifyJwt(token, secretKey) {
+  try {
+    if (!token) return null;
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+
+    const [headerB64, payloadB64, sigB64] = parts;
+    const dataToVerify = `${headerB64}.${payloadB64}`;
+
+    const enc = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      enc.encode(secretKey),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+
+    let sigStr = sigB64.replace(/-/g, "+").replace(/_/g, "/");
+    while (sigStr.length % 4) sigStr += "=";
+    const sigBytes = Uint8Array.from(atob(sigStr), c => c.charCodeAt(0));
+
+    const isValid = await crypto.subtle.verify("HMAC", key, sigBytes, enc.encode(dataToVerify));
+    if (!isValid) return null;
+
+    const payload = JSON.parse(base64UrlDecode(payloadB64));
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.exp && payload.exp < now) {
+      return null; // หมดอายุ
+    }
+
+    return payload;
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * Standard CORS Response Headers
+ */
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Origin, Accept",
+    "Access-Control-Max-Age": "86400",
+  };
+}
+
+/**
+ * JSON Response Formatter
+ */
+function json(data, status = 200, headers = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json; charset=utf-8",
+      ...corsHeaders(),
+      ...headers,
+    },
+  });
+}
+
+/**
+ * Error JSON Response Formatter
+ */
+function errorJson(message, status = 400, extra = {}) {
+  return json({ success: false, message, ...extra }, status);
+}
+
+// ============================================================================
+// 2. Authentication & Authorization Middleware Helpers
+// ============================================================================
+
+/**
+ * ถอดรหัสผู้ใช้จาก Authorization Header: Bearer <token>
+ */
+async function authenticate(request, env) {
+  const authHeader = request.headers.get("Authorization") || "";
+  if (!authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+  const token = authHeader.substring(7).trim();
+  const secret = env.JWT_SECRET || DEFAULT_JWT_SECRET;
+  return await verifyJwt(token, secret);
+}
+
+/**
+ * ตรวจสอบสิทธิการใช้งานหน้าและสิทธิแก้ไข
+ */
+async function checkPermission(db, userId, userRole, pageKey, requireEdit = false) {
+  if (userRole === "superadmin") {
+    return true; // Superadmin มีสิทธิสูงสุดทุกหน้า
+  }
+
+  const stmt = await db.prepare(
+    "SELECT can_view, can_edit FROM permissions WHERE user_id = ? AND page_key = ?"
+  ).bind(userId, pageKey).first();
+
+  if (!stmt) return false;
+  if (requireEdit) {
+    return stmt.can_edit === 1;
+  }
+  return stmt.can_view === 1;
+}
+
+/**
+ * ดึงสิทธิทั้งหมดของผู้ใช้ในรูปแบบ Object
+ */
+async function getUserPermissionsMap(db, userId, userRole) {
+  const map = {};
+  for (const key of ALL_PAGE_KEYS) {
+    if (userRole === "superadmin") {
+      map[key] = { can_view: 1, can_edit: 1 };
+    } else {
+      map[key] = { can_view: 0, can_edit: 0 };
+    }
+  }
+
+  if (userRole !== "superadmin") {
+    const results = await db.prepare(
+      "SELECT page_key, can_view, can_edit FROM permissions WHERE user_id = ?"
+    ).bind(userId).all();
+
+    if (results.results) {
+      for (const row of results.results) {
+        map[row.page_key] = {
+          can_view: Number(row.can_view) || 0,
+          can_edit: Number(row.can_edit) || 0,
+        };
+      }
+    }
+  }
+
+  return map;
+}
+
+// ============================================================================
+// 3. Cloudflare Worker Fetch Entry Point
+// ============================================================================
+
+export default {
+  async fetch(request, env, ctx) {
+    // 3.1 ตรวจสอบ Preflight CORS OPTIONS
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: corsHeaders(),
+      });
+    }
+
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const method = request.method;
+    const db = env.DB || env.saiyok_stock_db;
+
+    if (!db) {
+      return errorJson(
+        "ไม่พบการเชื่อมต่อ Cloudflare D1 Database (กรุณาตั้งค่า Binding 'DB' ใน wrangler.toml)",
+        500
+      );
+    }
+
+    try {
+      // ----------------------------------------------------------------------
+      // [PUBLIC ROUTES] ทุกคนเข้าถึงได้ ไม่ต้องล็อกอิน
+      // ----------------------------------------------------------------------
+
+      // ข้อมูลโรงพยาบาลและสถานะระบบ
+      if (path === "/" || path === "/api/public/info") {
+        return json({
+          success: true,
+          hospital: "โรงพยาบาลไทรโยค (Sai Yok Hospital)",
+          province: "จังหวัดกาญจนบุรี",
+          system: "ระบบบริหารคลังและสต๊อกพัสดุ",
+          version: "1.0.0",
+          server_time: new Date().toISOString(),
+          status: "online",
+        });
+      }
+
+      // ดึงข้อมูลกลุ่มพัสดุทั้งหมด
+      if (path === "/api/public/categories" && method === "GET") {
+        const query = await db.prepare(
+          "SELECT DISTINCT category FROM items WHERE is_active = 1 ORDER BY category ASC"
+        ).all();
+        const categories = (query.results || []).map(r => r.category);
+        return json({ success: true, categories });
+      }
+
+      // ตรวจเช็คสต๊อกพัสดุคงเหลือ (Public Stock View)
+      if (path === "/api/public/stock" && method === "GET") {
+        const q = (url.searchParams.get("q") || "").trim();
+        const category = (url.searchParams.get("category") || "").trim();
+        const status = (url.searchParams.get("status") || "").trim();
+
+        let sql = "SELECT * FROM view_stock_balance WHERE is_active = 1";
+        const params = [];
+
+        if (q) {
+          sql += " AND (item_code LIKE ? OR item_name LIKE ?)";
+          params.push(`%${q}%`, `%${q}%`);
+        }
+
+        if (category) {
+          sql += " AND category = ?";
+          params.push(category);
+        }
+
+        if (status) {
+          sql += " AND stock_status = ?";
+          params.push(status);
+        }
+
+        sql += " ORDER BY category ASC, item_code ASC";
+
+        const stmt = db.prepare(sql).bind(...params);
+        const { results } = await stmt.all();
+
+        // คำนวณสรุปข้อมูล KPI Dashboard
+        const totalItems = results.length;
+        let normalCount = 0;
+        let lowStockCount = 0;
+        let outOfStockCount = 0;
+        let totalValue = 0;
+
+        for (const item of results) {
+          if (item.stock_status === "NORMAL") normalCount++;
+          else if (item.stock_status === "LOW_STOCK") lowStockCount++;
+          else if (item.stock_status === "OUT_OF_STOCK") outOfStockCount++;
+          totalValue += Number(item.balance_val) || 0;
+        }
+
+        return json({
+          success: true,
+          count: totalItems,
+          summary: {
+            total_items: totalItems,
+            normal_count: normalCount,
+            low_stock_count: lowStockCount,
+            out_of_stock_count: outOfStockCount,
+            total_inventory_value: Math.round(totalValue * 100) / 100,
+          },
+          items: results || [],
+        });
+      }
+
+      // ----------------------------------------------------------------------
+      // [AUTHENTICATION ROUTES]
+      // ----------------------------------------------------------------------
+
+      // เข้าสู่ระบบ (POST /api/auth/login)
+      if (path === "/api/auth/login" && method === "POST") {
+        const body = await request.json().catch(() => ({}));
+        const username = (body.username || "").trim();
+        const password = (body.password || "").trim();
+
+        if (!username || !password) {
+          return errorJson("กรุณาระบุชื่อผู้ใช้งานและรหัสผ่าน", 400);
+        }
+
+        // ค้นหาผู้ใช้ในฐานข้อมูล
+        const user = await db.prepare(
+          "SELECT id, username, password_hash, fullname, department, role, is_active FROM users WHERE username = ?"
+        ).bind(username).first();
+
+        if (!user) {
+          return errorJson("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", 401);
+        }
+
+        if (user.is_active !== 1) {
+          return errorJson("บัญชีนี้ถูกปิดใช้งาน กรุณาติดต่อผู้ดูแลระบบ", 403);
+        }
+
+        // ตรวจสอบ Password Hash ด้วย SHA-256
+        const inputHash = await sha256Hex(password);
+        if (inputHash !== user.password_hash) {
+          return errorJson("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", 401);
+        }
+
+        // ดึง Permissions ของผู้ใช้
+        const permissions = await getUserPermissionsMap(db, user.id, user.role);
+
+        // ออก JWT Token (อายุ 24 ชั่วโมง)
+        const secret = env.JWT_SECRET || DEFAULT_JWT_SECRET;
+        const exp = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
+        const payload = {
+          userId: user.id,
+          username: user.username,
+          fullname: user.fullname,
+          department: user.department,
+          role: user.role,
+          exp,
+        };
+
+        const token = await signJwt(payload, secret);
+
+        return json({
+          success: true,
+          message: "เข้าสู่ระบบสำเร็จ",
+          token,
+          user: {
+            id: user.id,
+            username: user.username,
+            fullname: user.fullname,
+            department: user.department,
+            role: user.role,
+          },
+          permissions,
+        });
+      }
+
+      // ตรวจสอบ Token และดึงข้อมูลผู้ใช้ปัจจุบัน (GET /api/auth/me)
+      if (path === "/api/auth/me" && method === "GET") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) {
+          return errorJson("กรุณาเข้าสู่ระบบ", 401);
+        }
+
+        const user = await db.prepare(
+          "SELECT id, username, fullname, department, role, is_active FROM users WHERE id = ?"
+        ).bind(authUser.userId).first();
+
+        if (!user || user.is_active !== 1) {
+          return errorJson("บัญชีผู้ใช้ไม่ถูกต้องหรือถูกระงับ", 401);
+        }
+
+        const permissions = await getUserPermissionsMap(db, user.id, user.role);
+
+        return json({
+          success: true,
+          user: {
+            id: user.id,
+            username: user.username,
+            fullname: user.fullname,
+            department: user.department,
+            role: user.role,
+          },
+          permissions,
+        });
+      }
+
+      // ----------------------------------------------------------------------
+      // [PROTECTED MASTER DATA: ITEMS & SHOPS]
+      // ----------------------------------------------------------------------
+
+      // ทะเบียนรหัสพัสดุ (GET /api/items, POST /api/items, PUT /api/items/:id)
+      if (path === "/api/items" && method === "GET") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canView = await checkPermission(db, authUser.userId, authUser.role, "items", false);
+        if (!canView) return errorJson("ไม่มีสิทธิเข้าถึงหน้านี้", 403);
+
+        const { results } = await db.prepare(
+          "SELECT * FROM items ORDER BY category ASC, item_code ASC"
+        ).all();
+
+        return json({ success: true, items: results || [] });
+      }
+
+      if (path === "/api/items" && method === "POST") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "items", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิเพิ่มหรือแก้ไขข้อมูลพัสดุ", 403);
+
+        const b = await request.json().catch(() => ({}));
+        const item_code = (b.item_code || "").trim();
+        const item_name = (b.item_name || "").trim();
+        const unit = (b.unit || "").trim();
+        const category = (b.category || "").trim();
+        const min_stock = parseFloat(b.min_stock) || 0;
+        const max_stock = parseFloat(b.max_stock) || 0;
+
+        if (!item_code || !item_name || !unit || !category) {
+          return errorJson("กรุณากรอกรหัสพัสดุ, ชื่อพัสดุ, หน่วยนับ และกลุ่มพัสดุให้ครบถ้วน", 400);
+        }
+
+        const existing = await db.prepare("SELECT id FROM items WHERE item_code = ?").bind(item_code).first();
+        if (existing) {
+          return errorJson(`รหัสพัสดุ "${item_code}" มีอยู่ในระบบแล้ว`, 400);
+        }
+
+        await db.prepare(
+          "INSERT INTO items (item_code, item_name, unit, category, min_stock, max_stock, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)"
+        ).bind(item_code, item_name, unit, category, min_stock, max_stock).run();
+
+        return json({ success: true, message: "บันทึกรหัสพัสดุใหม่เรียบร้อยแล้ว" }, 201);
+      }
+
+      if (path.startsWith("/api/items/") && method === "PUT") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "items", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิแก้ไขข้อมูลพัสดุ", 403);
+
+        const itemId = path.split("/")[3];
+        const b = await request.json().catch(() => ({}));
+        const item_name = (b.item_name || "").trim();
+        const unit = (b.unit || "").trim();
+        const category = (b.category || "").trim();
+        const min_stock = parseFloat(b.min_stock) || 0;
+        const max_stock = parseFloat(b.max_stock) || 0;
+        const is_active = b.is_active !== undefined ? Number(b.is_active) : 1;
+
+        if (!item_name || !unit || !category) {
+          return errorJson("กรุณากรอกข้อมูลให้ครบถ้วน", 400);
+        }
+
+        await db.prepare(
+          "UPDATE items SET item_name = ?, unit = ?, category = ?, min_stock = ?, max_stock = ?, is_active = ? WHERE id = ?"
+        ).bind(item_name, unit, category, min_stock, max_stock, is_active, itemId).run();
+
+        return json({ success: true, message: "อัปเดตข้อมูลพัสดุเรียบร้อยแล้ว" });
+      }
+
+      // ข้อมูลร้านค้า / แหล่งรับ (GET /api/shops, POST /api/shops, PUT /api/shops/:id)
+      if (path === "/api/shops" && method === "GET") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canView = await checkPermission(db, authUser.userId, authUser.role, "shops", false);
+        if (!canView) return errorJson("ไม่มีสิทธิเข้าถึงข้อมูลร้านค้า", 403);
+
+        const { results } = await db.prepare("SELECT * FROM shops ORDER BY shop_name ASC").all();
+        return json({ success: true, shops: results || [] });
+      }
+
+      if (path === "/api/shops" && method === "POST") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "shops", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิเพิ่มข้อมูลร้านค้า", 403);
+
+        const b = await request.json().catch(() => ({}));
+        const shop_name = (b.shop_name || "").trim();
+        const address = (b.address || "").trim();
+        const phone = (b.phone || "").trim();
+        const tax_id = (b.tax_id || "").trim();
+
+        if (!shop_name) {
+          return errorJson("กรุณาระบุชื่อร้านค้า / แหล่งรับ", 400);
+        }
+
+        const existing = await db.prepare("SELECT id FROM shops WHERE shop_name = ?").bind(shop_name).first();
+        if (existing) {
+          return errorJson(`ชื่อร้านค้า "${shop_name}" มีอยู่ในระบบแล้ว`, 400);
+        }
+
+        await db.prepare(
+          "INSERT INTO shops (shop_name, address, phone, tax_id) VALUES (?, ?, ?, ?)"
+        ).bind(shop_name, address, phone, tax_id).run();
+
+        return json({ success: true, message: "บันทึกข้อมูลร้านค้าเรียบร้อยแล้ว" }, 201);
+      }
+
+      if (path.startsWith("/api/shops/") && method === "PUT") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "shops", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิแก้ไขข้อมูลร้านค้า", 403);
+
+        const shopId = path.split("/")[3];
+        const b = await request.json().catch(() => ({}));
+        const shop_name = (b.shop_name || "").trim();
+        const address = (b.address || "").trim();
+        const phone = (b.phone || "").trim();
+        const tax_id = (b.tax_id || "").trim();
+
+        if (!shop_name) return errorJson("กรุณาระบุชื่อร้านค้า", 400);
+
+        await db.prepare(
+          "UPDATE shops SET shop_name = ?, address = ?, phone = ?, tax_id = ? WHERE id = ?"
+        ).bind(shop_name, address, phone, tax_id, shopId).run();
+
+        return json({ success: true, message: "อัปเดตข้อมูลร้านค้าเรียบร้อยแล้ว" });
+      }
+
+      // ----------------------------------------------------------------------
+      // [STOCK TRANSACTIONS: BUYS (รับเข้า) & PAYS (เบิกจ่าย)]
+      // ----------------------------------------------------------------------
+
+      // 1. ดึงรายการรับเข้าพัสดุ (GET /api/buys)
+      if (path === "/api/buys" && method === "GET") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canView = await checkPermission(db, authUser.userId, authUser.role, "buy", false);
+        if (!canView) return errorJson("ไม่มีสิทธิเข้าถึงประวัติการรับเข้าพัสดุ", 403);
+
+        const limit = parseInt(url.searchParams.get("limit") || "100");
+        const { results } = await db.prepare(
+          "SELECT * FROM buys ORDER BY doc_date DESC, id DESC LIMIT ?"
+        ).bind(limit).all();
+
+        return json({ success: true, buys: results || [] });
+      }
+
+      // 2. บันทึกรับเข้าพัสดุ (POST /api/buys)
+      if (path === "/api/buys" && method === "POST") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "buy", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิบันทึกรับเข้าพัสดุ (ต้องมีสิทธิ can_edit ในหน้า buy)", 403);
+
+        const b = await request.json().catch(() => ({}));
+        const doc_date = (b.doc_date || "").trim();
+        const doc_no = (b.doc_no || "").trim();
+        const item_code = (b.item_code || "").trim();
+        const quantity = parseFloat(b.quantity) || 0;
+        const price_per_unit = parseFloat(b.price_per_unit) || 0;
+        const shop_name = (b.shop_name || "").trim();
+        const remark = (b.remark || "").trim();
+
+        if (!doc_date || !doc_no || !item_code || !shop_name) {
+          return errorJson("กรุณากรอกวันที่เอกสาร, เลขที่เอกสาร, รหัสพัสดุ และชื่อร้านค้าให้ครบถ้วน", 400);
+        }
+
+        if (quantity <= 0) {
+          return errorJson("จำนวนรับเข้าต้องมากกว่า 0", 400);
+        }
+
+        if (price_per_unit < 0) {
+          return errorJson("ราคาต่อหน่วยต้องไม่ติดลบ", 400);
+        }
+
+        // ดึงข้อมูลพัสดุจากตาราง items
+        const item = await db.prepare(
+          "SELECT item_name, category, unit FROM items WHERE item_code = ?"
+        ).bind(item_code).first();
+
+        if (!item) {
+          return errorJson(`ไม่พบรหัสพัสดุ "${item_code}" ในทะเบียนพัสดุ`, 404);
+        }
+
+        // คำนวณราคารวมอัตโนมัติ และงวดประจำเดือน (YYYY-MM)
+        const total_price = Math.round(quantity * price_per_unit * 100) / 100;
+        const ym_period = doc_date.slice(0, 7);
+
+        await db.prepare(`
+          INSERT INTO buys (
+            doc_date, doc_no, item_code, item_name, category, unit,
+            price_per_unit, quantity, total_price, shop_name, remark,
+            ym_period, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          doc_date, doc_no, item_code, item.item_name, item.category, item.unit,
+          price_per_unit, quantity, total_price, shop_name, remark,
+          ym_period, authUser.username
+        ).run();
+
+        // ดึงยอดคงเหลือล่าสุดหลังรับเข้า
+        const updatedStock = await db.prepare(
+          "SELECT balance_qty, unit, stock_status FROM view_stock_balance WHERE item_code = ?"
+        ).bind(item_code).first();
+
+        return json({
+          success: true,
+          message: `บันทึกรับเข้าพัสดุ ${item_code} เรียบร้อยแล้ว (จำนวน +${quantity} ${item.unit})`,
+          current_stock: updatedStock,
+        }, 201);
+      }
+
+      // 3. ดึงรายการเบิกจ่ายพัสดุ (GET /api/pays)
+      if (path === "/api/pays" && method === "GET") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canView = await checkPermission(db, authUser.userId, authUser.role, "pay", false);
+        if (!canView) return errorJson("ไม่มีสิทธิเข้าถึงประวัติการเบิกจ่าย", 403);
+
+        const limit = parseInt(url.searchParams.get("limit") || "100");
+        const { results } = await db.prepare(
+          "SELECT * FROM pays ORDER BY doc_date DESC, id DESC LIMIT ?"
+        ).bind(limit).all();
+
+        return json({ success: true, pays: results || [] });
+      }
+
+      // 4. บันทึกเบิกจ่ายพัสดุ พร้อมระบบป้องกันสต๊อกติดลบเด็ดขาด (POST /api/pays)
+      if (path === "/api/pays" && method === "POST") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "pay", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิบันทึกเบิกจ่ายพัสดุ (ต้องมีสิทธิ can_edit ในหน้า pay)", 403);
+
+        const b = await request.json().catch(() => ({}));
+        const doc_date = (b.doc_date || "").trim();
+        const doc_no = (b.doc_no || "").trim();
+        const item_code = (b.item_code || "").trim();
+        const quantity = parseFloat(b.quantity) || 0;
+        let price_per_unit = parseFloat(b.price_per_unit);
+        const department = (b.department || "").trim();
+        const remark = (b.remark || "").trim();
+
+        if (!doc_date || !doc_no || !item_code || !department) {
+          return errorJson("กรุณากรอกวันที่เอกสาร, เลขที่ใบเบิก, รหัสพัสดุ และหน่วยงานที่เบิกให้ครบถ้วน", 400);
+        }
+
+        if (quantity <= 0) {
+          return errorJson("จำนวนเบิกจ่ายต้องมากกว่า 0", 400);
+        }
+
+        // ====================================================================
+        // [CRITICAL ZERO-NEGATIVE STOCK CONTROL LOGIC]
+        // ตรวจสอบยอดคงเหลือจริงจาก view_stock_balance ก่อนตัดสต๊อกทุกครั้ง!
+        // ====================================================================
+        const stockRecord = await db.prepare(
+          "SELECT item_name, category, unit, balance_qty, avg_unit_price FROM view_stock_balance WHERE item_code = ?"
+        ).bind(item_code).first();
+
+        if (!stockRecord) {
+          return errorJson(`ไม่พบรหัสพัสดุ "${item_code}" ในคลังพัสดุ`, 404);
+        }
+
+        const currentBalance = Number(stockRecord.balance_qty) || 0;
+
+        // หากจำนวนที่ขอเบิก > ยอดคงเหลือจริง ให้ Reject 400 ทันที!
+        if (quantity > currentBalance) {
+          return json({
+            success: false,
+            error: "INSUFFICIENT_STOCK",
+            message: `ยอดคงเหลือในคลังไม่เพียงพอ! พัสดุ "${stockRecord.item_name}" มียอดคงเหลือจริงเพียง ${currentBalance} ${stockRecord.unit} (ขอเบิก ${quantity} ${stockRecord.unit}) ไม่อนุญาตให้เบิกติดลบ`,
+            available_qty: currentBalance,
+            requested_qty: quantity,
+            unit: stockRecord.unit,
+          }, 400);
+        }
+
+        // หากไม่ได้ระบุราคาต่อหน่วยมา ให้ใช้ราคาเฉลี่ยปัจจุบันจากคลัง
+        if (isNaN(price_per_unit) || price_per_unit <= 0) {
+          price_per_unit = Number(stockRecord.avg_unit_price) || 0;
+        }
+
+        const total_price = Math.round(quantity * price_per_unit * 100) / 100;
+        const ym_period = doc_date.slice(0, 7);
+
+        // บันทึกรายการเบิกจ่าย
+        await db.prepare(`
+          INSERT INTO pays (
+            doc_date, doc_no, item_code, item_name, category, unit,
+            price_per_unit, quantity, total_price, department, remark,
+            ym_period, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          doc_date, doc_no, item_code, stockRecord.item_name, stockRecord.category, stockRecord.unit,
+          price_per_unit, quantity, total_price, department, remark,
+          ym_period, authUser.username
+        ).run();
+
+        // ตรวจสอบยอดคงเหลือสุทธิหลังการเบิก
+        const afterStock = await db.prepare(
+          "SELECT balance_qty, unit, stock_status FROM view_stock_balance WHERE item_code = ?"
+        ).bind(item_code).first();
+
+        return json({
+          success: true,
+          message: `บันทึกเบิกจ่ายพัสดุเรียบร้อยแล้ว ยอดคงเหลือคงที่ ${afterStock.balance_qty} ${afterStock.unit}`,
+          remaining_qty: afterStock.balance_qty,
+          stock_status: afterStock.stock_status,
+        }, 201);
+      }
+
+      // ----------------------------------------------------------------------
+      // [REPORTS & STOCK CARD ENGINE]
+      // ----------------------------------------------------------------------
+
+      // เครื่องมือคำนวณบัตรคุมพัสดุแบบ Running Balance รายบรรทัด
+      // GET /api/reports/stock-card/:item_code?start_date=...&end_date=...
+      if (path.startsWith("/api/reports/stock-card/") && method === "GET") {
+        const item_code = decodeURIComponent(path.split("/")[4] || "").trim();
+        if (!item_code) return errorJson("กรุณาระบุรหัสพัสดุ", 400);
+
+        // ค่าเริ่มต้นช่วงวันที่: วันแรกของปีปัจจุบัน จนถึง วันปัจจุบัน
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const defaultStart = `${currentYear}-01-01`;
+        const defaultEnd = now.toISOString().slice(0, 10);
+
+        const start_date = url.searchParams.get("start_date") || defaultStart;
+        const end_date = url.searchParams.get("end_date") || defaultEnd;
+
+        // 1. ดึงข้อมูลพัสดุ
+        const item = await db.prepare(
+          "SELECT * FROM items WHERE item_code = ?"
+        ).bind(item_code).first();
+
+        if (!item) {
+          return errorJson(`ไม่พบรหัสพัสดุ "${item_code}" ในระบบ`, 404);
+        }
+
+        // 2. คำนวณยอดยกมาก่อน start_date (Brought Forward Calculation)
+        const buyBefore = await db.prepare(`
+          SELECT 
+            COALESCE(SUM(quantity), 0) AS qty,
+            COALESCE(SUM(total_price), 0) AS val
+          FROM buys 
+          WHERE item_code = ? AND doc_date < ?
+        `).bind(item_code, start_date).first();
+
+        const payBefore = await db.prepare(`
+          SELECT 
+            COALESCE(SUM(quantity), 0) AS qty,
+            COALESCE(SUM(total_price), 0) AS val
+          FROM pays 
+          WHERE item_code = ? AND doc_date < ?
+        `).bind(item_code, start_date).first();
+
+        const opening_qty = Math.round((Number(buyBefore.qty) - Number(payBefore.qty)) * 100) / 100;
+        const opening_val = Math.round((Number(buyBefore.val) - Number(payBefore.val)) * 100) / 100;
+
+        // 3. ดึงรายการรับเข้าและเบิกจ่ายในช่วง start_date ถึง end_date
+        const buysInRange = await db.prepare(`
+          SELECT 
+            'BUY' AS type,
+            id,
+            doc_date,
+            doc_no,
+            shop_name AS party,
+            quantity AS in_qty,
+            price_per_unit AS in_price,
+            total_price AS in_val,
+            0 AS out_qty,
+            0 AS out_price,
+            0 AS out_val,
+            remark,
+            created_at
+          FROM buys
+          WHERE item_code = ? AND doc_date >= ? AND doc_date <= ?
+        `).bind(item_code, start_date, end_date).all();
+
+        const paysInRange = await db.prepare(`
+          SELECT 
+            'PAY' AS type,
+            id,
+            doc_date,
+            doc_no,
+            department AS party,
+            0 AS in_qty,
+            0 AS in_price,
+            0 AS in_val,
+            quantity AS out_qty,
+            price_per_unit AS out_price,
+            total_price AS out_val,
+            remark,
+            created_at
+          FROM pays
+          WHERE item_code = ? AND doc_date >= ? AND doc_date <= ?
+        `).bind(item_code, start_date, end_date).all();
+
+        // รวมรายการและเรียงลำดับตาม วันที่เอกสาร -> เวลาสร้าง -> ID
+        const rawTransactions = [...(buysInRange.results || []), ...(paysInRange.results || [])];
+        rawTransactions.sort((a, b) => {
+          if (a.doc_date !== b.doc_date) {
+            return a.doc_date.localeCompare(b.doc_date);
+          }
+          if (a.created_at !== b.created_at) {
+            return a.created_at.localeCompare(b.created_at);
+          }
+          return a.id - b.id;
+        });
+
+        // 4. คำนวณยอดคงเหลือสะสมทีละบรรทัด (Running Balance Engine)
+        let running_qty = opening_qty;
+        let running_val = opening_val;
+        let total_in_period_qty = 0;
+        let total_in_period_val = 0;
+        let total_out_period_qty = 0;
+        let total_out_period_val = 0;
+
+        const transactions = rawTransactions.map(tx => {
+          const in_qty = Number(tx.in_qty) || 0;
+          const in_val = Number(tx.in_val) || 0;
+          const out_qty = Number(tx.out_qty) || 0;
+          const out_val = Number(tx.out_val) || 0;
+
+          total_in_period_qty += in_qty;
+          total_in_period_val += in_val;
+          total_out_period_qty += out_qty;
+          total_out_period_val += out_val;
+
+          running_qty += (in_qty - out_qty);
+          running_val += (in_val - out_val);
+
+          return {
+            ...tx,
+            in_qty,
+            in_price: Number(tx.in_price) || 0,
+            in_val,
+            out_qty,
+            out_price: Number(tx.out_price) || 0,
+            out_val,
+            balance_qty: Math.round(running_qty * 100) / 100,
+            balance_val: Math.round(running_val * 100) / 100,
+          };
+        });
+
+        return json({
+          success: true,
+          hospital: "โรงพยาบาลไทรโยค",
+          report_title: "บัตรคุมพัสดุ (Stock Card)",
+          item: {
+            item_code: item.item_code,
+            item_name: item.item_name,
+            unit: item.unit,
+            category: item.category,
+            min_stock: item.min_stock,
+            max_stock: item.max_stock,
+          },
+          period: {
+            start_date,
+            end_date,
+          },
+          opening_balance: {
+            qty: opening_qty,
+            val: opening_val,
+          },
+          transactions,
+          period_summary: {
+            total_in_qty: Math.round(total_in_period_qty * 100) / 100,
+            total_in_val: Math.round(total_in_period_val * 100) / 100,
+            total_out_qty: Math.round(total_out_period_qty * 100) / 100,
+            total_out_val: Math.round(total_out_period_val * 100) / 100,
+          },
+          closing_balance: {
+            qty: Math.round(running_qty * 100) / 100,
+            val: Math.round(running_val * 100) / 100,
+          },
+        });
+      }
+
+      // สรุปภาพรวมรายงานคลังพัสดุรายเดือน (GET /api/reports/summary)
+      if (path === "/api/reports/summary" && method === "GET") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canView = await checkPermission(db, authUser.userId, authUser.role, "reports", false);
+        if (!canView) return errorJson("ไม่มีสิทธิเข้าถึงรายงาน", 403);
+
+        const departmentPays = await db.prepare(`
+          SELECT department, COUNT(*) as doc_count, SUM(quantity) as sum_qty, SUM(total_price) as sum_val
+          FROM pays
+          GROUP BY department
+          ORDER BY sum_val DESC
+        `).all();
+
+        const categoryStocks = await db.prepare(`
+          SELECT category, COUNT(*) as item_count, SUM(balance_qty) as total_qty, SUM(balance_val) as total_val
+          FROM view_stock_balance
+          WHERE is_active = 1
+          GROUP BY category
+        `).all();
+
+        return json({
+          success: true,
+          by_department: departmentPays.results || [],
+          by_category: categoryStocks.results || [],
+        });
+      }
+
+      // ----------------------------------------------------------------------
+      // [SUPERADMIN MANAGEMENT ROUTES: role === 'superadmin']
+      // ----------------------------------------------------------------------
+
+      // ดึงรายชื่อผู้ใช้และสิทธิทั้งหมด (GET /api/admin/users)
+      if (path === "/api/admin/users" && method === "GET") {
+        const authUser = await authenticate(request, env);
+        if (!authUser || authUser.role !== "superadmin") {
+          return errorJson("เฉพาะผู้ดูแลระบบสูงสุด (Superadmin) เท่านั้น", 403);
+        }
+
+        const usersQuery = await db.prepare(
+          "SELECT id, username, fullname, department, role, is_active, created_at FROM users ORDER BY id ASC"
+        ).all();
+
+        const permissionsQuery = await db.prepare(
+          "SELECT user_id, page_key, can_view, can_edit FROM permissions"
+        ).all();
+
+        const permissionsByUser = {};
+        for (const p of (permissionsQuery.results || [])) {
+          if (!permissionsByUser[p.user_id]) {
+            permissionsByUser[p.user_id] = {};
+          }
+          permissionsByUser[p.user_id][p.page_key] = {
+            can_view: Number(p.can_view) || 0,
+            can_edit: Number(p.can_edit) || 0,
+          };
+        }
+
+        const users = (usersQuery.results || []).map(u => ({
+          ...u,
+          permissions: permissionsByUser[u.id] || {},
+        }));
+
+        return json({ success: true, users, available_page_keys: ALL_PAGE_KEYS });
+      }
+
+      // สร้างผู้ใช้ใหม่พร้อมกำหนดสิทธิ (POST /api/admin/users)
+      if (path === "/api/admin/users" && method === "POST") {
+        const authUser = await authenticate(request, env);
+        if (!authUser || authUser.role !== "superadmin") {
+          return errorJson("เฉพาะผู้ดูแลระบบสูงสุด (Superadmin) เท่านั้น", 403);
+        }
+
+        const b = await request.json().catch(() => ({}));
+        const username = (b.username || "").trim().toLowerCase();
+        const password = (b.password || "").trim();
+        const fullname = (b.fullname || "").trim();
+        const department = (b.department || "").trim();
+        const role = (b.role || "user").trim();
+        const permissionsInput = b.permissions || {};
+
+        if (!username || !password || !fullname || !department) {
+          return errorJson("กรุณากรอก Username, Password, ชื่อ-สกุล และหน่วยงาน ให้ครบถ้วน", 400);
+        }
+
+        const existing = await db.prepare("SELECT id FROM users WHERE username = ?").bind(username).first();
+        if (existing) {
+          return errorJson(`ชื่อผู้ใช้ "${username}" มีอยู่ในระบบแล้ว`, 400);
+        }
+
+        // แฮชรหัสผ่านด้วย SHA-256
+        const password_hash = await sha256Hex(password);
+
+        // บันทึกผู้ใช้
+        const insertUser = await db.prepare(
+          "INSERT INTO users (username, password_hash, fullname, department, role, is_active) VALUES (?, ?, ?, ?, ?, 1)"
+        ).bind(username, password_hash, fullname, department, role).run();
+
+        const newUserId = insertUser.meta?.last_row_id;
+
+        // บันทึกสิทธิทั้ง 7 หน้า
+        for (const pageKey of ALL_PAGE_KEYS) {
+          const perm = permissionsInput[pageKey] || {};
+          const can_view = role === "superadmin" ? 1 : (perm.can_view ? 1 : 0);
+          const can_edit = role === "superadmin" ? 1 : (perm.can_edit ? 1 : 0);
+
+          await db.prepare(
+            "INSERT INTO permissions (user_id, page_key, can_view, can_edit) VALUES (?, ?, ?, ?)"
+          ).bind(newUserId, pageKey, can_view, can_edit).run();
+        }
+
+        return json({
+          success: true,
+          message: `สร้างผู้ใช้งาน "${username}" และกำหนดสิทธิเรียบร้อยแล้ว`,
+          userId: newUserId,
+        }, 201);
+      }
+
+      // แก้ไขสิทธิการเข้าถึงรายหน้า (PUT /api/admin/users/:id/permissions)
+      if (path.startsWith("/api/admin/users/") && path.endsWith("/permissions") && method === "PUT") {
+        const authUser = await authenticate(request, env);
+        if (!authUser || authUser.role !== "superadmin") {
+          return errorJson("เฉพาะผู้ดูแลระบบสูงสุด (Superadmin) เท่านั้น", 403);
+        }
+
+        const parts = path.split("/");
+        const targetUserId = parseInt(parts[4]);
+        if (!targetUserId) return errorJson("รหัสผู้ใช้ไม่ถูกต้อง", 400);
+
+        const b = await request.json().catch(() => ({}));
+        const permissionsInput = b.permissions || {};
+
+        // ตรวจสอบว่าผู้ใช้มีอยู่จริง
+        const targetUser = await db.prepare("SELECT id, role FROM users WHERE id = ?").bind(targetUserId).first();
+        if (!targetUser) return errorJson("ไม่พบผู้ใช้งานนี้ในระบบ", 404);
+
+        // ปรับปรุงสิทธิแต่ละหน้า
+        for (const pageKey of ALL_PAGE_KEYS) {
+          const perm = permissionsInput[pageKey] || {};
+          const can_view = targetUser.role === "superadmin" ? 1 : (perm.can_view ? 1 : 0);
+          const can_edit = targetUser.role === "superadmin" ? 1 : (perm.can_edit ? 1 : 0);
+
+          await db.prepare(`
+            INSERT INTO permissions (user_id, page_key, can_view, can_edit)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, page_key) DO UPDATE SET
+              can_view = excluded.can_view,
+              can_edit = excluded.can_edit
+          `).bind(targetUserId, pageKey, can_view, can_edit).run();
+        }
+
+        return json({
+          success: true,
+          message: "บันทึกและปรับปรุงสิทธิการใช้งานเรียบร้อยแล้ว",
+        });
+      }
+
+      // เปิด/ปิดการใช้งานผู้ใช้ (PUT /api/admin/users/:id/toggle-status)
+      if (path.startsWith("/api/admin/users/") && path.endsWith("/toggle-status") && method === "PUT") {
+        const authUser = await authenticate(request, env);
+        if (!authUser || authUser.role !== "superadmin") {
+          return errorJson("เฉพาะผู้ดูแลระบบสูงสุด (Superadmin) เท่านั้น", 403);
+        }
+
+        const parts = path.split("/");
+        const targetUserId = parseInt(parts[4]);
+        if (!targetUserId) return errorJson("รหัสผู้ใช้ไม่ถูกต้อง", 400);
+
+        // ป้องกันการปิดการใช้งานบัญชี Superadmin หลัก (chanpibul / id = 1)
+        if (targetUserId === 1) {
+          return errorJson("ไม่อนุญาตให้ปิดการใช้งานบัญชี Superadmin หลัก (chanpibul)", 400);
+        }
+
+        const user = await db.prepare("SELECT id, is_active FROM users WHERE id = ?").bind(targetUserId).first();
+        if (!user) return errorJson("ไม่พบผู้ใช้งานนี้", 404);
+
+        const newStatus = user.is_active === 1 ? 0 : 1;
+        await db.prepare("UPDATE users SET is_active = ? WHERE id = ?").bind(newStatus, targetUserId).run();
+
+        return json({
+          success: true,
+          message: newStatus === 1 ? "เปิดการใช้งานผู้ใช้เรียบร้อยแล้ว" : "ระงับการใช้งานผู้ใช้เรียบร้อยแล้ว",
+          is_active: newStatus,
+        });
+      }
+
+      // รีเซ็ตรหัสผ่านผู้ใช้ (PUT /api/admin/users/:id/reset-password)
+      if (path.startsWith("/api/admin/users/") && path.endsWith("/reset-password") && method === "PUT") {
+        const authUser = await authenticate(request, env);
+        if (!authUser || authUser.role !== "superadmin") {
+          return errorJson("เฉพาะผู้ดูแลระบบสูงสุด (Superadmin) เท่านั้น", 403);
+        }
+
+        const parts = path.split("/");
+        const targetUserId = parseInt(parts[4]);
+        const b = await request.json().catch(() => ({}));
+        const newPassword = (b.new_password || "").trim();
+
+        if (!newPassword || newPassword.length < 4) {
+          return errorJson("รหัสผ่านใหม่ต้องมีความยาวอย่างน้อย 4 ตัวอักษร", 400);
+        }
+
+        const newHash = await sha256Hex(newPassword);
+        await db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").bind(newHash, targetUserId).run();
+
+        return json({ success: true, message: "รีเซ็ตรหัสผ่านเรียบร้อยแล้ว" });
+      }
+
+      // Route Not Found 404
+      return errorJson(`ไม่พบ Endpoint: ${method} ${path}`, 404);
+
+    } catch (err) {
+      // ดักจับ Unhandled Exceptions ส่ง Error Message สวยงาม
+      return errorJson(`Server Error: ${err.message || String(err)}`, 500);
+    }
+  },
+};

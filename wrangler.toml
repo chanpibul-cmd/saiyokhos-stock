@@ -1,0 +1,14 @@
+name = "saiyok-hospital-stock"
+main = "src/index.js"
+compatibility_date = "2024-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Cloudflare D1 Database Binding
+[[d1_databases]]
+binding = "DB"
+database_name = "saiyok_stock_db"
+database_id = "bcaa7332-adb3-42fe-b838-b0413f802d44"
+
+# Environment Variables
+[vars]
+JWT_SECRET = "SaiYokHospital_StockManagement_Secret_2024_Key!#"

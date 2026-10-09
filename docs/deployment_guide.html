@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>คู่มือจำลองขั้นตอนการ Deploy - โรงพยาบาลไทรโยค</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <style>
+    .step-active {
+      border-color: #059669;
+      background-color: rgba(5, 150, 105, 0.12);
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-4 sm:p-6 antialiased font-sans flex flex-col items-center">
+
+  <div class="max-w-4xl w-full space-y-4">
+
+    <!-- Header & Title -->
+    <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-emerald-500 text-slate-950 flex items-center justify-center font-bold text-xl shadow-lg">
+          <i class="fa-solid fa-play"></i>
+        </div>
+        <div>
+          <h1 class="text-lg sm:text-xl font-bold text-white flex items-center space-x-2">
+            <span>สื่อการสอนจำลองขั้นตอนการนำขึ้นใช้งานจริง (Deployment Walkthrough)</span>
+          </h1>
+          <p class="text-xs text-slate-400">ระบบบริหารคลังและสต๊อกพัสดุ โรงพยาบาลไทรโยค จ.กาญจนบุรี</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-2">
+        <a href="index.html" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 transition flex items-center space-x-1.5">
+          <i class="fa-solid fa-arrow-left"></i>
+          <span>กลับหน้าเว็บหลัก</span>
+        </a>
+      </div>
+    </div>
+
+    <!-- VIDEO PLAYER SIMULATOR CONTAINER -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col">
+      
+      <!-- Video Player Top Bar (Simulated Screen Header) -->
+      <div class="bg-slate-950/80 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400">
+        <div class="flex items-center space-x-2">
+          <span class="w-3 h-3 rounded-full bg-rose-500 inline-block"></span>
+          <span class="w-3 h-3 rounded-full bg-amber-500 inline-block"></span>
+          <span class="w-3 h-3 rounded-full bg-emerald-500 inline-block"></span>
+          <span class="ml-2 font-mono text-slate-300" id="player-title">Scene 1: ภาพรวมและการเตรียมเครื่องมือ</span>
+        </div>
+        <div class="flex items-center space-x-3 font-mono">
+          <span id="player-time">00:00 / 06:00</span>
+          <span class="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px]">1080p HD</span>
+        </div>
+      </div>
+
+      <!-- Video Screen Area (Visual Simulated Scene) -->
+      <div class="relative bg-slate-950 p-6 min-h-[380px] flex flex-col justify-between" id="video-screen">
+        
+        <!-- Screen Content Container -->
+        <div id="scene-container" class="space-y-4">
+          <!-- Dynamic Scene Content injected by JS -->
+        </div>
+
+        <!-- Watermark / Overlay badge -->
+        <div class="flex items-center justify-between text-[11px] text-slate-500 border-t border-slate-800/80 pt-3 mt-4">
+          <div class="flex items-center space-x-2">
+            <i class="fa-solid fa-hospital text-emerald-500"></i>
+            <span>รพ.ไทรโยค &bull; Cloudflare Workers & D1 + GitHub Pages</span>
+          </div>
+          <div class="flex items-center space-x-1 text-emerald-400 font-mono">
+            <i class="fa-solid fa-circle text-[8px] animate-pulse"></i>
+            <span>STEP-BY-STEP SIMULATION</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Video Progress Bar -->
+      <div class="w-full bg-slate-800 h-1.5 relative cursor-pointer" id="progress-bar-container">
+        <div id="progress-bar" class="bg-emerald-500 h-full w-[16.6%] transition-all duration-300"></div>
+      </div>
+
+      <!-- Player Controls Bar -->
+      <div class="bg-slate-900 px-4 py-3 flex items-center justify-between">
+        
+        <!-- Left: Play/Pause/Prev/Next -->
+        <div class="flex items-center space-x-3">
+          <button id="btn-prev" class="p-2 text-slate-400 hover:text-white transition rounded-lg hover:bg-slate-800">
+            <i class="fa-solid fa-backward-step"></i>
+          </button>
+          <button id="btn-play-pause" class="w-9 h-9 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 flex items-center justify-center transition shadow font-bold">
+            <i class="fa-solid fa-play" id="play-icon"></i>
+          </button>
+          <button id="btn-next" class="p-2 text-slate-400 hover:text-white transition rounded-lg hover:bg-slate-800">
+            <i class="fa-solid fa-forward-step"></i>
+          </button>
+          <div class="h-4 w-px bg-slate-800 mx-1"></div>
+          <span class="text-xs text-slate-300 font-medium" id="current-step-label">ฉากที่ 1 / 6</span>
+        </div>
+
+        <!-- Right: Actions -->
+        <div class="flex items-center space-x-2">
+          <button id="btn-copy-code" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-3 py-1.5 rounded-lg border border-slate-700 flex items-center space-x-1.5 transition">
+            <i class="fa-solid fa-copy"></i>
+            <span>คัดลอกคำสั่งในฉากนี้</span>
+          </button>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- STEP TIMELINE NAVIGATOR -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2">
+      <button class="step-nav-btn step-active p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-left transition text-xs" data-step="0">
+        <span class="text-slate-500 block text-[10px] font-mono">01:00</span>
+        <span class="font-semibold text-slate-200 block truncate">1. เตรียมเครื่องมือ</span>
+      </button>
+
+      <button class="step-nav-btn p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-left transition text-xs" data-step="1">
+        <span class="text-slate-500 block text-[10px] font-mono">02:00</span>
+        <span class="font-semibold text-slate-200 block truncate">2. สร้าง D1 DB</span>
+      </button>
+
+      <button class="step-nav-btn p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-left transition text-xs" data-step="2">
+        <span class="text-slate-500 block text-[10px] font-mono">03:00</span>
+        <span class="font-semibold text-slate-200 block truncate">3. รัน Schema D1</span>
+      </button>
+
+      <button class="step-nav-btn p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-left transition text-xs" data-step="3">
+        <span class="text-slate-500 block text-[10px] font-mono">04:00</span>
+        <span class="font-semibold text-slate-200 block truncate">4. Deploy Worker</span>
+      </button>
+
+      <button class="step-nav-btn p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-left transition text-xs" data-step="4">
+        <span class="text-slate-500 block text-[10px] font-mono">05:00</span>
+        <span class="font-semibold text-slate-200 block truncate">5. GitHub Pages</span>
+      </button>
+
+      <button class="step-nav-btn p-2.5 rounded-xl border border-slate-800 bg-slate-900 text-left transition text-xs" data-step="5">
+        <span class="text-slate-500 block text-[10px] font-mono">06:00</span>
+        <span class="font-semibold text-slate-200 block truncate">6. เชื่อมต่อ &amp; ใช้งาน</span>
+      </button>
+    </div>
+
+  </div>
+
+  <script>
+    const SCENES = [
+      {
+        title: "Scene 1: สิ่งที่ต้องเตรียมความพร้อมล่วงหน้า (Prerequisites)",
+        time: "01:00 / 06:00",
+        command: "node -v\nnpm -v\ngit --version",
+        html: `
+          <div class="space-y-3">
+            <div class="inline-flex items-center space-x-2 bg-emerald-950/60 text-emerald-400 border border-emerald-800/80 px-3 py-1 rounded-full text-xs">
+              <i class="fa-solid fa-list-check"></i>
+              <span>ขั้นตอนที่ 1 : ตรวจสอบเครื่องมือในเครื่องคอมพิวเตอร์</span>
+            </div>
+            <h2 class="text-xl font-bold text-white">เตรียมความพร้อมก่อนเริ่มนำขึ้นเซิร์ฟเวอร์จริง</h2>
+            <p class="text-sm text-slate-300 leading-relaxed">
+              ก่อนเริ่ม Deploy คุณจะต้องมี 3 สิ่งนี้พร้อมบนคอมพิวเตอร์ของคุณ:
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+              <div class="p-3 bg-slate-900 rounded-xl border border-slate-800">
+                <div class="text-emerald-400 font-bold text-sm mb-1"><i class="fa-brands fa-node-js mr-1"></i> Node.js & npm</div>
+                <p class="text-xs text-slate-400">ดาวน์โหลดจาก nodejs.org (LTS) เพื่อใช้คำสั่ง wrangler ในการเชื่อมต่อ Cloudflare</p>
+              </div>
+              <div class="p-3 bg-slate-900 rounded-xl border border-slate-800">
+                <div class="text-sky-400 font-bold text-sm mb-1"><i class="fa-brands fa-cloudflare mr-1"></i> บัญชี Cloudflare</div>
+                <p class="text-xs text-slate-400">สมัครใช้งานฟรีที่ cloudflare.com สำหรับใช้งาน Workers API และ D1 Database</p>
+              </div>
+              <div class="p-3 bg-slate-900 rounded-xl border border-slate-800">
+                <div class="text-amber-400 font-bold text-sm mb-1"><i class="fa-brands fa-github mr-1"></i> บัญชี GitHub</div>
+                <p class="text-xs text-slate-400">สำหรับโฮสต์หน้าเว็บ Frontend บน GitHub Pages ฟรีแบบ HTTPS ตลอดชีพ</p>
+              </div>
+            </div>
+            <div class="bg-slate-900/90 rounded-lg p-3 font-mono text-xs border border-slate-800 text-slate-300">
+              <span class="text-slate-500"># ตรวจสอบว่ามี Node.js และ Git พร้อมหรือยัง:</span><br>
+              <span class="text-emerald-400">PS C:\\webapp\\stock&gt;</span> node -v &amp;&amp; git --version
+            </div>
+          </div>
+        `
+      },
+      {
+        title: "Scene 2: ล็อกอิน Cloudflare & สร้างฐานข้อมูล D1 (D1 Setup)",
+        time: "02:00 / 06:00",
+        command: "npx wrangler login\nnpx wrangler d1 create saiyok_stock_db",
+        html: `
+          <div class="space-y-3">
+            <div class="inline-flex items-center space-x-2 bg-emerald-950/60 text-emerald-400 border border-emerald-800/80 px-3 py-1 rounded-full text-xs">
+              <i class="fa-solid fa-database"></i>
+              <span>ขั้นตอนที่ 2 : สร้างฐานข้อมูล D1 บน Cloudflare Cloud</span>
+            </div>
+            <h2 class="text-xl font-bold text-white">เข้าสู่ระบบและสร้างฐานข้อมูล saiyok_stock_db</h2>
+            <div class="bg-black/80 rounded-xl p-4 font-mono text-xs text-slate-200 border border-slate-800 space-y-2">
+              <div class="text-slate-400"># 1. ล็อกอินเข้า Cloudflare (จะเปิดหน้าต่างเบราว์เซอร์ให้กด Allow)</div>
+              <div><span class="text-emerald-400">PS C:\\webapp\\stock&gt;</span> <span class="text-amber-300">npx wrangler login</span></div>
+              <div class="text-emerald-500">✔ Successfully logged in.</div>
+              <div class="pt-2 text-slate-400"># 2. สร้างฐานข้อมูล D1 ใหม่</div>
+              <div><span class="text-emerald-400">PS C:\\webapp\\stock&gt;</span> <span class="text-amber-300">npx wrangler d1 create saiyok_stock_db</span></div>
+              <div class="text-slate-300 bg-slate-900/90 p-2.5 rounded border border-slate-800 mt-2">
+                <span class="text-emerald-400 font-bold">[[d1_databases]]</span><br>
+                binding = <span class="text-teal-300">"DB"</span><br>
+                database_name = <span class="text-teal-300">"saiyok_stock_db"</span><br>
+                database_id = <span class="text-amber-300 font-bold">"a48f910b-1234-5678-90ab-cdef12345678"</span>  <span class="text-rose-400">&larr; คัดลอกรหัสนี้!</span>
+              </div>
+            </div>
+            <p class="text-xs text-amber-300/90 flex items-center space-x-1.5">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+              <span>นำรหัส database_id ที่ได้ไปวางแทนที่ในไฟล์ <strong>wrangler.toml</strong> ทันที</span>
+            </p>
+          </div>
+        `
+      },
+      {
+        title: "Scene 3: อัปโหลดโครงสร้างตารางและ Seed Data (schema.sql)",
+        time: "03:00 / 06:00",
+        command: "npx wrangler d1 execute saiyok_stock_db --remote --file=./schema.sql",
+        html: `
+          <div class="space-y-3">
+            <div class="inline-flex items-center space-x-2 bg-emerald-950/60 text-emerald-400 border border-emerald-800/80 px-3 py-1 rounded-full text-xs">
+              <i class="fa-solid fa-table"></i>
+              <span>ขั้นตอนที่ 3 : รัน Schema และ Initial Seed ขึ้น D1</span>
+            </div>
+            <h2 class="text-xl font-bold text-white">สร้างตาราง users, items, buys, pays และ view_stock_balance</h2>
+            <p class="text-sm text-slate-300">
+              รันคำสั่งเพียง 1 บรรทัด เพื่อให้ระบบสร้างตารางทั้งหมด พร้อมบัญชี Superadmin <code class="text-emerald-400">chanpibul</code> และร้านค้า "ยอดยกมา":
+            </p>
+            <div class="bg-black/80 rounded-xl p-4 font-mono text-xs text-slate-200 border border-slate-800 space-y-2">
+              <div><span class="text-emerald-400">PS C:\\webapp\\stock&gt;</span> <span class="text-amber-300">npx wrangler d1 execute saiyok_stock_db --remote --file=./schema.sql</span></div>
+              <div class="text-slate-400">🌀 Executing on remote database saiyok_stock_db...</div>
+              <div class="text-emerald-400">🚣 Executed 36 commands in 0.82s</div>
+              <div class="text-slate-300 pt-1">✔ Tables: users, permissions, shops, items, buys, pays created.</div>
+              <div class="text-slate-300">✔ View: view_stock_balance created.</div>
+              <div class="text-emerald-300">✔ Initial Superadmin &amp; Opening Balances inserted!</div>
+            </div>
+          </div>
+        `
+      },
+      {
+        title: "Scene 4: Deploy Cloudflare Workers Backend",
+        time: "04:00 / 06:00",
+        command: "npx wrangler deploy",
+        html: `
+          <div class="space-y-3">
+            <div class="inline-flex items-center space-x-2 bg-emerald-950/60 text-emerald-400 border border-emerald-800/80 px-3 py-1 rounded-full text-xs">
+              <i class="fa-solid fa-cloud-arrow-up"></i>
+              <span>ขั้นตอนที่ 4 : Deploy REST API Backend</span>
+            </div>
+            <h2 class="text-xl font-bold text-white">อัปโหลดโค้ด src/index.js ขึ้นสู่ Cloudflare Workers Edge</h2>
+            <div class="bg-black/80 rounded-xl p-4 font-mono text-xs text-slate-200 border border-slate-800 space-y-2">
+              <div><span class="text-emerald-400">PS C:\\webapp\\stock&gt;</span> <span class="text-amber-300">npx wrangler deploy</span></div>
+              <div class="text-slate-400">Uploaded saiyok-hospital-stock (1.1 sec)</div>
+              <div class="text-emerald-400 font-bold">Published saiyok-hospital-stock (0.3 sec)</div>
+              <div class="bg-emerald-950/80 p-2.5 rounded border border-emerald-800 text-emerald-200 font-bold flex items-center justify-between">
+                <span>https://saiyok-hospital-stock.your-subdomain.workers.dev</span>
+                <span class="text-[10px] bg-emerald-800 text-white px-2 py-0.5 rounded">URL ของ Backend</span>
+              </div>
+            </div>
+            <p class="text-xs text-slate-300">
+              <i class="fa-solid fa-check text-emerald-400 mr-1"></i>
+              ขณะนี้ REST API พร้อมทำงานตลอด 24 ชั่วโมง มีระบบรักษาความปลอดภัย JWT และระบบป้องกันสต๊อกติดลบเรียบร้อยแล้ว
+            </p>
+          </div>
+        `
+      },
+      {
+        title: "Scene 5: Deploy Frontend ขึ้น GitHub Pages (โฟลเดอร์ /docs)",
+        time: "05:00 / 06:00",
+        command: "git init\ngit add .\ngit commit -m \"Initial deploy\"\ngit branch -M main\ngit remote add origin https://github.com/<user>/saiyok-stock.git\ngit push -u origin main",
+        html: `
+          <div class="space-y-3">
+            <div class="inline-flex items-center space-x-2 bg-emerald-950/60 text-emerald-400 border border-emerald-800/80 px-3 py-1 rounded-full text-xs">
+              <i class="fa-brands fa-github"></i>
+              <span>ขั้นตอนที่ 5 : อัปโหลดหน้าเว็บขึ้น GitHub Pages</span>
+            </div>
+            <h2 class="text-xl font-bold text-white">ตั้งค่า GitHub Pages ให้เปิดจากโฟลเดอร์ /docs</h2>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3 text-xs">
+              <div class="flex items-start space-x-3">
+                <div class="w-6 h-6 rounded-full bg-slate-800 text-emerald-400 flex items-center justify-center font-bold flex-shrink-0">1</div>
+                <div>Push โค้ดทั้งหมดขึ้น GitHub Repository ที่คุณสร้างไว้</div>
+              </div>
+              <div class="flex items-start space-x-3">
+                <div class="w-6 h-6 rounded-full bg-slate-800 text-emerald-400 flex items-center justify-center font-bold flex-shrink-0">2</div>
+                <div>ไปที่แท็บ <strong>Settings</strong> &gt; เมนูด้านซ้ายเลือก <strong>Pages</strong></div>
+              </div>
+              <div class="flex items-start space-x-3">
+                <div class="w-6 h-6 rounded-full bg-emerald-500 text-slate-950 flex items-center justify-center font-bold flex-shrink-0">3</div>
+                <div>
+                  หัวข้อ <strong>Build and deployment</strong>:
+                  <div class="bg-black/60 p-2 rounded mt-1 border border-slate-800 font-mono text-[11px] text-amber-300">
+                    Source: Deploy from a branch<br>
+                    Branch: main  |  Folder: /docs  <span class="text-rose-400 font-bold">&larr; ต้องเลือก /docs</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p class="text-xs text-emerald-400 font-mono">
+              URL หน้าเว็บของคุณ: https://&lt;username&gt;.github.io/saiyok-stock/
+            </p>
+          </div>
+        `
+      },
+      {
+        title: "Scene 6: เชื่อมต่อ API & เข้าสู่ระบบใช้งานครั้งแรก",
+        time: "06:00 / 06:00",
+        command: "User: chanpibul\nPass: 300628",
+        html: `
+          <div class="space-y-3">
+            <div class="inline-flex items-center space-x-2 bg-emerald-950/60 text-emerald-400 border border-emerald-800/80 px-3 py-1 rounded-full text-xs">
+              <i class="fa-solid fa-circle-check"></i>
+              <span>ขั้นตอนที่ 6 : เริ่มต้นใช้งานระบบจริง</span>
+            </div>
+            <h2 class="text-xl font-bold text-white">เชื่อมต่อ Worker API เข้ากับหน้าเว็บ และเข้าสู่ระบบ</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div class="p-3.5 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
+                <div class="font-bold text-slate-200 flex items-center space-x-1.5">
+                  <i class="fa-solid fa-gear text-emerald-400"></i>
+                  <span>เชื่อมต่อ API URL</span>
+                </div>
+                <p class="text-slate-400">1. เปิดเว็บ GitHub Pages ของคุณ</p>
+                <p class="text-slate-400">2. คลิกปุ่ม <strong>"Cloudflare API"</strong> ที่มุมขวาบน</p>
+                <p class="text-slate-400">3. วาง Worker URL ที่ได้จากขั้นตอนที่ 4 แล้วกด <strong>"บันทึกการตั้งค่า"</strong></p>
+              </div>
+
+              <div class="p-3.5 bg-slate-900 rounded-xl border border-slate-800 space-y-2">
+                <div class="font-bold text-slate-200 flex items-center space-x-1.5">
+                  <i class="fa-solid fa-key text-amber-400"></i>
+                  <span>บัญชี Superadmin บังคับ</span>
+                </div>
+                <div class="bg-black/60 p-2 rounded border border-slate-800 font-mono text-[11px] space-y-1">
+                  <div>Username: <span class="text-emerald-400 font-bold">chanpibul</span></div>
+                  <div>Password: <span class="text-amber-300 font-bold">300628</span></div>
+                  <div class="text-slate-400 text-[10px]">(สิทธิสูงสุด: Superadmin เข้าถึงได้ทั้ง 7 หน้า)</div>
+                </div>
+              </div>
+            </div>
+            <div class="p-2.5 bg-emerald-950/40 border border-emerald-800/60 rounded-lg text-emerald-300 text-xs text-center font-medium">
+              🎉 ระบบบริหารคลังและสต๊อกพัสดุ โรงพยาบาลไทรโยค พร้อมใช้งานอย่างเป็นทางการ!
+            </div>
+          </div>
+        `
+      }
+    ];
+
+    let currentStep = 0;
+    let isPlaying = false;
+    let playInterval = null;
+
+    function renderScene(step) {
+      currentStep = step;
+      const scene = SCENES[step];
+
+      document.getElementById('player-title').textContent = scene.title;
+      document.getElementById('player-time').textContent = scene.time;
+      document.getElementById('scene-container').innerHTML = scene.html;
+      document.getElementById('current-step-label').textContent = `ฉากที่ ${step + 1} / ${SCENES.length}`;
+
+      const percentage = ((step + 1) / SCENES.length) * 100;
+      document.getElementById('progress-bar').style.width = `${percentage}%`;
+
+      document.querySelectorAll('.step-nav-btn').forEach((btn, index) => {
+        if (index === step) {
+          btn.classList.add('step-active');
+          btn.classList.add('border-emerald-600');
+        } else {
+          btn.classList.remove('step-active');
+          btn.classList.remove('border-emerald-600');
+        }
+      });
+    }
+
+    function togglePlayPause() {
+      isPlaying = !isPlaying;
+      const icon = document.getElementById('play-icon');
+      if (isPlaying) {
+        icon.className = 'fa-solid fa-pause';
+        playInterval = setInterval(() => {
+          if (currentStep < SCENES.length - 1) {
+            renderScene(currentStep + 1);
+          } else {
+            renderScene(0);
+          }
+        }, 7000);
+      } else {
+        icon.className = 'fa-solid fa-play';
+        clearInterval(playInterval);
+      }
+    }
+
+    document.getElementById('btn-play-pause').addEventListener('click', togglePlayPause);
+    document.getElementById('btn-prev').addEventListener('click', () => { if (currentStep > 0) renderScene(currentStep - 1); });
+    document.getElementById('btn-next').addEventListener('click', () => { if (currentStep < SCENES.length - 1) renderScene(currentStep + 1); });
+
+    document.querySelectorAll('.step-nav-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const step = parseInt(btn.getAttribute('data-step'));
+        renderScene(step);
+      });
+    });
+
+    document.getElementById('btn-copy-code').addEventListener('click', () => {
+      const cmd = SCENES[currentStep].command;
+      navigator.clipboard.writeText(cmd).then(() => {
+        const btn = document.getElementById('btn-copy-code');
+        btn.innerHTML = '<i class="fa-solid fa-check text-emerald-400"></i> <span>คัดลอกเรียบร้อย!</span>';
+        setTimeout(() => {
+          btn.innerHTML = '<i class="fa-solid fa-copy"></i> <span>คัดลอกคำสั่งในฉากนี้</span>';
+        }, 2000);
+      });
+    });
+
+    renderScene(0);
+  </script>
+</body>
+</html>
