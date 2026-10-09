@@ -172,12 +172,12 @@ LEFT JOIN (
 -- 8. ข้อมูลเริ่มต้นบังคับ (Mandatory Initial Seed Data)
 -- ============================================================================
 
--- 8.1 Superadmin: chanpibul / Password hash SHA-256 ของ "300628"
+-- 8.1 Superadmin: chanpibul / Password hash SHA-256 ของ "300628" (6b7f24b13669a466538a8b19c01cb3f88e3f95f0f8724ad156c501595c1a33c2)
 INSERT INTO users (id, username, password_hash, fullname, department, role, is_active)
 VALUES (
     1,
     'chanpibul',
-    '3d0a31206f4705574519be9b22a4c66cb1e85f50ef2562ec8724d2621743f07a',
+    '6b7f24b13669a466538a8b19c01cb3f88e3f95f0f8724ad156c501595c1a33c2',
     'ผู้ดูแลระบบสูงสุด',
     'กลุ่มงานบริหารทั่วไป โรงพยาบาลไทรโยค',
     'superadmin',

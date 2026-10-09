@@ -1331,8 +1331,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   document.getElementById('form-login').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const username = document.getElementById('login-username').value;
-    const password = document.getElementById('login-password').value;
+    const username = document.getElementById('login-username').value.trim();
+    const password = document.getElementById('login-password').value.trim();
 
     const res = await apiRequest('/api/auth/login', 'POST', { username, password });
     if (res.ok && res.data.success) {
