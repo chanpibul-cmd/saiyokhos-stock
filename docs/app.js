@@ -31,7 +31,7 @@ const state = {
   currentUser: null,
   userPermissions: {},
   token: localStorage.getItem('saiyok_token') || null,
-  apiBaseUrl: localStorage.getItem('saiyok_api_url') || '',
+  apiBaseUrl: localStorage.getItem('saiyok_api_url') || 'https://saiyok-hospital-stock.chanpibulwork.workers.dev',
   activePage: 'stock_balance',
   isOnlineWorker: false,
   stockItems: [],
@@ -1700,6 +1700,49 @@ document.addEventListener('DOMContentLoaded', async () => {
       showToast(res.data.message || 'เกิดข้อผิดพลาด', 'error');
     }
   });
+
+  // 16. Superadmin: Google Sheet Sync Modal & Trigger
+  const btnOpenSync = document.getElementById('btn-open-sync-sheet');
+  if (btnOpenSync) {
+    btnOpenSync.addEventListener('click', () => {
+      document.getElementById('sync-sheet-status-box').classList.add('hidden');
+      openModal('sync-sheet-modal');
+    });
+  }
+
+  const btnDoSync = document.getElementById('btn-do-sync-sheet');
+  if (btnDoSync) {
+    btnDoSync.addEventListener('click', async () => {
+      let rawInput = document.getElementById('sync-sheet-input-id').value.trim();
+      let sheetId = rawInput;
+      const match = rawInput.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+      if (match) sheetId = match[1];
+
+      const statusBox = document.getElementById('sync-sheet-status-box');
+      const syncBtnText = document.getElementById('btn-sync-sheet-text');
+      const syncIcon = document.getElementById('btn-sync-icon');
+
+      statusBox.className = 'p-3 rounded-lg text-xs bg-amber-50 text-amber-800 border border-amber-200 block';
+      statusBox.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> กำลังดึงข้อมูลและซิงค์จาก Google Sheet เข้าสู่ D1 กรุณารอสักครู่...';
+      btnDoSync.disabled = true;
+      if (syncIcon) syncIcon.classList.add('fa-spin');
+
+      const res = await apiRequest('/api/admin/sync-google-sheet', 'POST', { sheet_id: sheetId });
+      btnDoSync.disabled = false;
+      if (syncIcon) syncIcon.classList.remove('fa-spin');
+
+      if (res.ok && res.data.success) {
+        statusBox.className = 'p-3 rounded-lg text-xs bg-emerald-50 text-emerald-800 border border-emerald-200 block';
+        statusBox.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-600 mr-1"></i> ${res.data.message || 'ซิงค์ข้อมูลสำเร็จ!'}`;
+        showToast('ซิงค์ข้อมูลจาก Google Sheet เรียบร้อยแล้ว', 'success');
+        loadStockBalance();
+      } else {
+        statusBox.className = 'p-3 rounded-lg text-xs bg-rose-50 text-rose-800 border border-rose-200 block';
+        statusBox.innerHTML = `<i class="fa-solid fa-circle-exclamation text-rose-600 mr-1"></i> ${res.data.message || 'เกิดข้อผิดพลาดในการซิงค์'}`;
+        showToast(res.data.message || 'ซิงค์ข้อมูลล้มเหลว', 'error');
+      }
+    });
+  }
 });
 
 // ============================================================================

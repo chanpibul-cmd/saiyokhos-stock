@@ -1133,6 +1133,136 @@ export default {
         return json({ success: true, message: "รีเซ็ตรหัสผ่านเรียบร้อยแล้ว" });
       }
 
+      // ซิงค์ข้อมูลอัตโนมัติจาก Google Sheet (POST /api/admin/sync-google-sheet)
+      if (path === "/api/admin/sync-google-sheet" && method === "POST") {
+        const authUser = await authenticate(request, env);
+        if (!authUser || authUser.role !== "superadmin") {
+          return errorJson("เฉพาะผู้ดูแลระบบสูงสุด (Superadmin) เท่านั้น", 403);
+        }
+
+        const b = await request.json().catch(() => ({}));
+        const sheetId = (b.sheet_id || "1Ljnwa14H1C_1eGSgkXxblGFQk9KNCcFy-OvSlzHKv5o").trim();
+
+        // Helper fetch CSV text
+        async function fetchCsv(gid) {
+          const res = await fetch(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv&gid=${gid}`);
+          if (!res.ok) throw new Error(`ไม่สามารถดึงข้อมูลจาก Google Sheet gid=${gid} ได้ (HTTP ${res.status})`);
+          return await res.text();
+        }
+
+        // Helper simple CSV row splitter
+        function parseCsvLines(csvText) {
+          const lines = csvText.split(/\r?\n/).filter(l => l.trim().length > 0);
+          if (lines.length === 0) return [];
+
+          function splitLine(line) {
+            const result = [];
+            let cur = '';
+            let inQuotes = false;
+            for (let i = 0; i < line.length; i++) {
+              const char = line[i];
+              if (char === '"') {
+                if (inQuotes && line[i + 1] === '"') {
+                  cur += '"';
+                  i++;
+                } else {
+                  inQuotes = !inQuotes;
+                }
+              } else if (char === ',' && !inQuotes) {
+                result.push(cur.trim());
+                cur = '';
+              } else {
+                cur += char;
+              }
+            }
+            result.push(cur.trim());
+            return result;
+          }
+
+          const headers = splitLine(lines[0]);
+          const rows = [];
+          for (let i = 1; i < lines.length; i++) {
+            const vals = splitLine(lines[i]);
+            const obj = {};
+            for (let j = 0; j < headers.length; j++) {
+              obj[headers[j] || `col_${j}`] = vals[j] !== undefined ? vals[j] : '';
+            }
+            rows.push(obj);
+          }
+          return rows;
+        }
+
+        function cleanNumVal(v) {
+          if (!v) return 0;
+          const n = parseFloat(String(v).replace(/,/g, '').trim());
+          return isNaN(n) ? 0 : n;
+        }
+
+        function convertDmy(s) {
+          if (!s) return "2025-10-01";
+          const m = String(s).trim().match(/^(\d+)\/(\d+)\/(\d+)$/);
+          if (m) {
+            return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+          }
+          if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+          return "2025-10-01";
+        }
+
+        let shopsSynced = 0;
+        let itemsSynced = 0;
+        let buysSynced = 0;
+        let paysSynced = 0;
+
+        // 1. Sync Shops (gid: 907850828)
+        try {
+          const shopsText = await fetchCsv("907850828");
+          const shopRows = parseCsvLines(shopsText);
+          for (const s of shopRows) {
+            const name = (s["ร้านค้า"] || "").trim();
+            if (name) {
+              await db.prepare(
+                "INSERT OR IGNORE INTO shops (shop_name, address, phone, tax_id) VALUES (?, ?, ?, ?)"
+              ).bind(name, s["ที่อยู่"] || "", s["เบอร์โทร"] || "", s["เลขผู้เสียภาษี"] || "").run();
+              shopsSynced++;
+            }
+          }
+        } catch (e) {
+          console.warn("Sync shops warning:", e.message);
+        }
+
+        // 2. Sync Items (gid: 0)
+        try {
+          const itemsText = await fetchCsv("0");
+          const itemRows = parseCsvLines(itemsText);
+          for (const it of itemRows) {
+            const code = (it["รหัส"] || "").trim();
+            const name = (it["รายการ"] || "").trim();
+            if (code && name) {
+              const unit = (it["หน่วยนับ"] || "หน่วย").trim();
+              const cat = (it["กลุ่มสินค้า"] || "ทั่วไป").trim();
+              const min = cleanNumVal(it["ขั้นต่ำ"]);
+              const max = cleanNumVal(it["ขั้นสูง"]);
+              await db.prepare(
+                "INSERT INTO items (item_code, item_name, unit, category, min_stock, max_stock, is_active) VALUES (?, ?, ?, ?, ?, ?, 1) ON CONFLICT(item_code) DO UPDATE SET item_name = excluded.item_name, unit = excluded.unit, category = excluded.category, min_stock = excluded.min_stock, max_stock = excluded.max_stock"
+              ).bind(code, name, unit, cat, min, max).run();
+              itemsSynced++;
+            }
+          }
+        } catch (e) {
+          console.warn("Sync items warning:", e.message);
+        }
+
+        return json({
+          success: true,
+          message: `ซิงค์ข้อมูลจาก Google Sheet สำเร็จ (ทะเบียนพัสดุ: ${itemsSynced} รายการ, ร้านค้า: ${shopsSynced} ร้านค้า)`,
+          sheet_id: sheetId,
+          synced: {
+            items: itemsSynced,
+            shops: shopsSynced
+          }
+        });
+      }
+
       // Route Not Found 404
       return errorJson(`ไม่พบ Endpoint: ${method} ${path}`, 404);
 
