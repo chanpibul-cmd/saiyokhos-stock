@@ -11,6 +11,8 @@ const ALL_PAGES = [
   'stock_balance',
   'buy',
   'pay',
+  'dashboard_buy',
+  'dashboard_pay',
   'items',
   'shops',
   'reports',
@@ -21,6 +23,8 @@ const PAGE_METADATA = {
   stock_balance: { name: 'ยอดคงเหลือสต๊อก', icon: 'fa-boxes-stacked' },
   buy: { name: 'บันทึกรับเข้าพัสดุ', icon: 'fa-cart-arrow-down' },
   pay: { name: 'บันทึกเบิกจ่ายพัสดุ', icon: 'fa-hand-holding-medical' },
+  dashboard_buy: { name: 'Dashboard รับเข้า', icon: 'fa-chart-line' },
+  dashboard_pay: { name: 'Dashboard เบิกจ่าย', icon: 'fa-chart-pie' },
   items: { name: 'ทะเบียนรหัสพัสดุ', icon: 'fa-barcode' },
   shops: { name: 'ข้อมูลร้านค้า / แหล่งรับ', icon: 'fa-store' },
   reports: { name: 'บัตรคุมพัสดุ & รายงาน', icon: 'fa-file-invoice' },
@@ -40,6 +44,34 @@ const state = {
   users: [],
   recentBuys: [],
   recentPays: [],
+
+  // Pagination states
+  stockPagination: {
+    page: 1,
+    pageSize: 25,
+    filteredItems: []
+  },
+  buysPagination: {
+    page: 1,
+    pageSize: 15,
+    total: 0,
+    totalPages: 1,
+    q: ''
+  },
+  paysPagination: {
+    page: 1,
+    pageSize: 15,
+    total: 0,
+    totalPages: 1,
+    q: ''
+  },
+
+  // Multi-item cart states for same bill/invoice
+  buyCart: [],
+  payCart: [],
+
+  // Recent bill preview cache for pulling into pay
+  selectedPullBill: null
 };
 
 // ============================================================================
@@ -59,6 +91,8 @@ const mockData = {
         stock_balance: { can_view: 1, can_edit: 1 },
         buy: { can_view: 1, can_edit: 1 },
         pay: { can_view: 1, can_edit: 1 },
+        dashboard_buy: { can_view: 1, can_edit: 1 },
+        dashboard_pay: { can_view: 1, can_edit: 1 },
         items: { can_view: 1, can_edit: 1 },
         shops: { can_view: 1, can_edit: 1 },
         reports: { can_view: 1, can_edit: 1 },
@@ -76,6 +110,8 @@ const mockData = {
         stock_balance: { can_view: 1, can_edit: 1 },
         buy: { can_view: 1, can_edit: 1 },
         pay: { can_view: 1, can_edit: 1 },
+        dashboard_buy: { can_view: 1, can_edit: 1 },
+        dashboard_pay: { can_view: 1, can_edit: 1 },
         items: { can_view: 1, can_edit: 1 },
         shops: { can_view: 1, can_edit: 1 },
         reports: { can_view: 1, can_edit: 1 },
@@ -93,6 +129,8 @@ const mockData = {
         stock_balance: { can_view: 1, can_edit: 0 },
         buy: { can_view: 0, can_edit: 0 },
         pay: { can_view: 1, can_edit: 1 },
+        dashboard_buy: { can_view: 0, can_edit: 0 },
+        dashboard_pay: { can_view: 1, can_edit: 0 },
         items: { can_view: 1, can_edit: 0 },
         shops: { can_view: 0, can_edit: 0 },
         reports: { can_view: 1, can_edit: 0 },
@@ -347,76 +385,209 @@ function handleMockApiFallback(endpoint, method, data) {
     return { ok: true, status: 201, data: { success: true, message: 'บันทึกร้านค้าเรียบร้อย' } };
   }
 
-  // Buys
-  if (endpoint === '/api/buys' && method === 'GET') {
-    return { ok: true, status: 200, data: { success: true, buys: [...mockData.buys].reverse() } };
-  }
-  if (endpoint === '/api/buys' && method === 'POST') {
-    const item = mockData.items.find(i => i.item_code === data.item_code);
-    const newBuy = {
-      id: mockData.buys.length + 1,
-      doc_date: data.doc_date,
-      doc_no: data.doc_no,
-      item_code: data.item_code,
-      item_name: item ? item.item_name : data.item_code,
-      category: item ? item.category : '',
-      unit: item ? item.unit : '',
-      price_per_unit: Number(data.price_per_unit),
-      quantity: Number(data.quantity),
-      total_price: Math.round(Number(data.quantity) * Number(data.price_per_unit) * 100) / 100,
-      shop_name: data.shop_name,
-      remark: data.remark || '',
-      ym_period: data.doc_date.slice(0, 7),
-      created_by: state.currentUser ? state.currentUser.username : 'demo'
-    };
-    mockData.buys.push(newBuy);
-    return { ok: true, status: 201, data: { success: true, message: 'บันทึกรับเข้าพัสดุเรียบร้อยแล้ว' } };
+  // Buys: Recent Bills
+  if (endpoint === '/api/buys/recent-bills') {
+    const billsMap = {};
+    mockData.buys.forEach(b => {
+      if (!billsMap[b.doc_no]) {
+        billsMap[b.doc_no] = {
+          doc_no: b.doc_no,
+          doc_date: b.doc_date,
+          shop_name: b.shop_name,
+          total_price: 0,
+          item_count: 0,
+          items: []
+        };
+      }
+      billsMap[b.doc_no].total_price += Number(b.total_price) || 0;
+      billsMap[b.doc_no].item_count += 1;
+      billsMap[b.doc_no].items.push(b);
+    });
+    const bills = Object.values(billsMap).sort((a, b) => b.doc_date.localeCompare(a.doc_date)).slice(0, 50);
+    return { ok: true, status: 200, data: { success: true, bills } };
   }
 
-  // Pays (With Zero Negative Stock Check)
-  if (endpoint === '/api/pays' && method === 'GET') {
-    return { ok: true, status: 200, data: { success: true, pays: [...mockData.pays].reverse() } };
+  // Buys: By Bill
+  if (endpoint.startsWith('/api/buys/by-bill/')) {
+    const docNo = decodeURIComponent(endpoint.replace('/api/buys/by-bill/', '').split('?')[0]);
+    const items = mockData.buys.filter(b => b.doc_no === docNo);
+    if (!items.length) {
+      return { ok: false, status: 404, data: { success: false, message: 'ไม่พบบิลนี้' } };
+    }
+    const total_price = items.reduce((s, i) => s + (Number(i.total_price) || 0), 0);
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        success: true,
+        doc_no: docNo,
+        doc_date: items[0].doc_date,
+        shop_name: items[0].shop_name,
+        total_price: Math.round(total_price * 100) / 100,
+        items
+      }
+    };
   }
+
+  // Buys (GET with search & pagination, POST with single or multi-item)
+  if (endpoint.startsWith('/api/buys') && method === 'GET') {
+    const urlObj = new URL('http://local' + endpoint);
+    const q = (urlObj.searchParams.get('q') || '').toLowerCase().trim();
+    const page = parseInt(urlObj.searchParams.get('page') || '1', 10);
+    const limit = parseInt(urlObj.searchParams.get('limit') || '15', 10);
+
+    let list = [...mockData.buys].reverse();
+    if (q) {
+      list = list.filter(b => 
+        (b.doc_no || '').toLowerCase().includes(q) ||
+        (b.item_code || '').toLowerCase().includes(q) ||
+        (b.item_name || '').toLowerCase().includes(q) ||
+        (b.shop_name || '').toLowerCase().includes(q)
+      );
+    }
+    const total = list.length;
+    const total_pages = Math.ceil(total / limit) || 1;
+    const offset = (page - 1) * limit;
+    const paged = list.slice(offset, offset + limit);
+
+    return {
+      ok: true,
+      status: 200,
+      data: { success: true, buys: paged, total, page, total_pages }
+    };
+  }
+
+  if (endpoint === '/api/buys' && method === 'POST') {
+    const itemsToInsert = Array.isArray(data.items) && data.items.length > 0 
+      ? data.items 
+      : [data];
+
+    itemsToInsert.forEach(it => {
+      const item = mockData.items.find(i => i.item_code === it.item_code);
+      const qty = Number(it.quantity);
+      let total_price = Number(it.total_price);
+      let price_per_unit = Number(it.price_per_unit);
+
+      if (total_price && !price_per_unit && qty > 0) {
+        price_per_unit = Math.round((total_price / qty) * 10000) / 10000;
+      } else if (price_per_unit && !total_price) {
+        total_price = Math.round(qty * price_per_unit * 100) / 100;
+      } else if (!total_price && !price_per_unit) {
+        total_price = 0;
+        price_per_unit = 0;
+      }
+
+      const newBuy = {
+        id: mockData.buys.length + 1,
+        doc_date: data.doc_date,
+        doc_no: data.doc_no,
+        item_code: it.item_code,
+        item_name: item ? item.item_name : it.item_name || it.item_code,
+        category: item ? item.category : it.category || '',
+        unit: item ? item.unit : it.unit || '',
+        price_per_unit,
+        quantity: qty,
+        total_price,
+        shop_name: data.shop_name,
+        remark: it.remark || data.remark || '',
+        ym_period: data.doc_date.slice(0, 7),
+        created_by: state.currentUser ? state.currentUser.username : 'demo'
+      };
+      mockData.buys.push(newBuy);
+    });
+
+    return { ok: true, status: 201, data: { success: true, message: `บันทึกรับเข้าพัสดุสำเร็จ (${itemsToInsert.length} รายการ)` } };
+  }
+
+  // Pays (GET with search & pagination, POST with single or multi-item & stock validation)
+  if (endpoint.startsWith('/api/pays') && method === 'GET') {
+    const urlObj = new URL('http://local' + endpoint);
+    const q = (urlObj.searchParams.get('q') || '').toLowerCase().trim();
+    const page = parseInt(urlObj.searchParams.get('page') || '1', 10);
+    const limit = parseInt(urlObj.searchParams.get('limit') || '15', 10);
+
+    let list = [...mockData.pays].reverse();
+    if (q) {
+      list = list.filter(p => 
+        (p.doc_no || '').toLowerCase().includes(q) ||
+        (p.item_code || '').toLowerCase().includes(q) ||
+        (p.item_name || '').toLowerCase().includes(q) ||
+        (p.department || '').toLowerCase().includes(q)
+      );
+    }
+    const total = list.length;
+    const total_pages = Math.ceil(total / limit) || 1;
+    const offset = (page - 1) * limit;
+    const paged = list.slice(offset, offset + limit);
+
+    return {
+      ok: true,
+      status: 200,
+      data: { success: true, pays: paged, total, page, total_pages }
+    };
+  }
+
   if (endpoint === '/api/pays' && method === 'POST') {
     const stockList = calculateMockStockBalance();
-    const stock = stockList.find(s => s.item_code === data.item_code);
-    const qty = Number(data.quantity);
+    const itemsToInsert = Array.isArray(data.items) && data.items.length > 0 
+      ? data.items 
+      : [data];
 
-    if (!stock) {
-      return { ok: false, status: 404, data: { success: false, message: 'ไม่พบรหัสพัสดุ' } };
+    // Validate all items before inserting
+    for (const it of itemsToInsert) {
+      const stock = stockList.find(s => s.item_code === it.item_code);
+      const qty = Number(it.quantity);
+      if (!stock) {
+        return { ok: false, status: 404, data: { success: false, message: `ไม่พบพัสดุรหัส ${it.item_code}` } };
+      }
+      if (qty > stock.balance_qty) {
+        return {
+          ok: false,
+          status: 400,
+          data: {
+            success: false,
+            error: 'INSUFFICIENT_STOCK',
+            message: `ยอดคงเหลือในคลังไม่เพียงพอสำหรับ ${stock.item_name}! คงเหลือ ${stock.balance_qty} ${stock.unit} (ขอเบิก ${qty}) ไม่อนุญาตให้เบิกติดลบ`
+          }
+        };
+      }
     }
 
-    if (qty > stock.balance_qty) {
-      return {
-        ok: false,
-        status: 400,
-        data: {
-          success: false,
-          error: 'INSUFFICIENT_STOCK',
-          message: `ยอดคงเหลือในคลังไม่เพียงพอ! คงเหลือจริงเพียง ${stock.balance_qty} ${stock.unit} ไม่อนุญาตให้เบิกติดลบ`,
-          available_qty: stock.balance_qty
-        }
+    itemsToInsert.forEach(it => {
+      const stock = stockList.find(s => s.item_code === it.item_code);
+      const qty = Number(it.quantity);
+      let total_price = Number(it.total_price);
+      let price_per_unit = Number(it.price_per_unit);
+
+      if (total_price && !price_per_unit && qty > 0) {
+        price_per_unit = Math.round((total_price / qty) * 10000) / 10000;
+      } else if (price_per_unit && !total_price) {
+        total_price = Math.round(qty * price_per_unit * 100) / 100;
+      } else if (!total_price && !price_per_unit) {
+        price_per_unit = stock.avg_unit_price || 0;
+        total_price = Math.round(qty * price_per_unit * 100) / 100;
+      }
+
+      const newPay = {
+        id: mockData.pays.length + 1,
+        doc_date: data.doc_date,
+        doc_no: data.doc_no,
+        item_code: it.item_code,
+        item_name: stock.item_name,
+        category: stock.category,
+        unit: stock.unit,
+        price_per_unit,
+        quantity: qty,
+        total_price,
+        department: data.department,
+        remark: it.remark || data.remark || '',
+        ym_period: data.doc_date.slice(0, 7),
+        created_by: state.currentUser ? state.currentUser.username : 'demo'
       };
-    }
+      mockData.pays.push(newPay);
+    });
 
-    const newPay = {
-      id: mockData.pays.length + 1,
-      doc_date: data.doc_date,
-      doc_no: data.doc_no,
-      item_code: data.item_code,
-      item_name: stock.item_name,
-      category: stock.category,
-      unit: stock.unit,
-      price_per_unit: Number(data.price_per_unit) || stock.avg_unit_price,
-      quantity: qty,
-      total_price: Math.round(qty * (Number(data.price_per_unit) || stock.avg_unit_price) * 100) / 100,
-      department: data.department,
-      remark: data.remark || '',
-      ym_period: data.doc_date.slice(0, 7),
-      created_by: state.currentUser ? state.currentUser.username : 'demo'
-    };
-    mockData.pays.push(newPay);
-    return { ok: true, status: 201, data: { success: true, message: 'บันทึกเบิกจ่ายพัสดุเรียบร้อยแล้ว' } };
+    return { ok: true, status: 201, data: { success: true, message: `บันทึกเบิกจ่ายพัสดุสำเร็จ (${itemsToInsert.length} รายการ)` } };
   }
 
   // Stock Card Report
@@ -538,6 +709,114 @@ function handleMockApiFallback(endpoint, method, data) {
     };
     mockData.users.push(newUser);
     return { ok: true, status: 201, data: { success: true, message: 'สร้างผู้ใช้สำเร็จ' } };
+  }
+  if (endpoint.startsWith('/api/admin/users/') && method === 'PUT' && !endpoint.includes('toggle-status') && !endpoint.includes('permissions') && !endpoint.includes('reset-password')) {
+    const id = parseInt(endpoint.split('/')[4], 10);
+    const user = mockData.users.find(u => u.id === id);
+    if (!user) return { ok: false, status: 404, data: { success: false, message: 'ไม่พบผู้ใช้' } };
+    if (data.fullname) user.fullname = data.fullname;
+    if (data.department) user.department = data.department;
+    if (data.role) user.role = data.role;
+    return { ok: true, status: 200, data: { success: true, message: 'อัปเดตข้อมูลผู้ใช้งานเรียบร้อย' } };
+  }
+  if (endpoint.startsWith('/api/admin/users/') && method === 'DELETE') {
+    const id = parseInt(endpoint.split('/')[4], 10);
+    if (id === 1) return { ok: false, status: 400, data: { success: false, message: 'ไม่อนุญาตให้ลบ Superadmin id=1' } };
+    mockData.users = mockData.users.filter(u => u.id !== id);
+    return { ok: true, status: 200, data: { success: true, message: 'ลบผู้ใช้งานเรียบร้อย' } };
+  }
+
+  // Dashboard Reports Mock
+  if (endpoint.startsWith('/api/reports/dashboard-buys')) {
+    const total_val = mockData.buys.reduce((s, b) => s + (Number(b.total_price) || 0), 0);
+    const total_items = mockData.buys.reduce((s, b) => s + (Number(b.quantity) || 0), 0);
+    const unique_docs = new Set(mockData.buys.map(b => b.doc_no)).size;
+    const unique_shops = new Set(mockData.buys.map(b => b.shop_name)).size;
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        success: true,
+        filter: { type: 'fiscal_year', start_date: '2025-10-01', end_date: '2026-09-30' },
+        kpis: {
+          total_value: Math.round(total_val * 100) / 100,
+          total_items,
+          total_docs: unique_docs,
+          total_shops: unique_shops
+        },
+        monthly_trend: [
+          { ym: '2025-10', total_val: 12000, doc_count: 5 },
+          { ym: '2025-11', total_val: 18500, doc_count: 8 },
+          { ym: '2025-12', total_val: 15400, doc_count: 6 },
+          { ym: '2026-01', total_val: 22000, doc_count: 10 },
+          { ym: '2026-02', total_val: 19800, doc_count: 7 },
+          { ym: '2026-03', total_val: 25400, doc_count: 11 }
+        ],
+        categories: [
+          { category: 'เวชภัณฑ์มิใช่ยา', count: 12, total_val: 45000 },
+          { category: 'วัสดุสำนักงาน', count: 6, total_val: 12500 }
+        ],
+        top_shops: [
+          { shop_name: 'องค์การเภสัชกรรม (GPO)', doc_count: 6, total_val: 32000 },
+          { shop_name: 'บริษัท ดีเคเอสเอช (ประเทศไทย) จำกัด', doc_count: 4, total_val: 25500 }
+        ],
+        top_items: mockData.items.slice(0, 5).map(i => ({
+          item_code: i.item_code,
+          item_name: i.item_name,
+          category: i.category,
+          unit: i.unit,
+          total_qty: 120,
+          total_val: 21600
+        }))
+      }
+    };
+  }
+
+  if (endpoint.startsWith('/api/reports/dashboard-pays')) {
+    const total_val = mockData.pays.reduce((s, p) => s + (Number(p.total_price) || 0), 0);
+    const total_items = mockData.pays.reduce((s, p) => s + (Number(p.quantity) || 0), 0);
+    const unique_docs = new Set(mockData.pays.map(p => p.doc_no)).size;
+    const unique_depts = new Set(mockData.pays.map(p => p.department)).size;
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        success: true,
+        filter: { type: 'fiscal_year', start_date: '2025-10-01', end_date: '2026-09-30' },
+        kpis: {
+          total_value: Math.round(total_val * 100) / 100,
+          total_items,
+          total_docs: unique_docs,
+          total_departments: unique_depts
+        },
+        monthly_trend: [
+          { ym: '2025-10', total_val: 9500, doc_count: 4 },
+          { ym: '2025-11', total_val: 14200, doc_count: 7 },
+          { ym: '2025-12', total_val: 11000, doc_count: 5 },
+          { ym: '2026-01', total_val: 18400, doc_count: 9 },
+          { ym: '2026-02', total_val: 16100, doc_count: 6 },
+          { ym: '2026-03', total_val: 21000, doc_count: 10 }
+        ],
+        departments: [
+          { department: 'กลุ่มงานอุบัติเหตุและฉุกเฉิน (ER)', doc_count: 5, total_val: 28000 },
+          { department: 'กลุ่มงานการพยาบาลผู้ป่วยนอก (OPD)', doc_count: 4, total_val: 19500 }
+        ],
+        categories: [
+          { category: 'เวชภัณฑ์มิใช่ยา', total_qty: 210, total_val: 38000 },
+          { category: 'วัสดุสำนักงาน', total_qty: 65, total_val: 9500 }
+        ],
+        top_items: mockData.items.slice(0, 5).map(i => ({
+          item_code: i.item_code,
+          item_name: i.item_name,
+          category: i.category,
+          unit: i.unit,
+          total_qty: 95,
+          total_val: 17100
+        }))
+      }
+    };
   }
 
   return { ok: true, status: 200, data: { success: true } };
@@ -687,6 +966,8 @@ function navigateToPage(pageKey) {
   if (pageKey === 'stock_balance') loadStockBalance();
   if (pageKey === 'buy') initBuyPage();
   if (pageKey === 'pay') initPayPage();
+  if (pageKey === 'dashboard_buy') initDashboardBuy();
+  if (pageKey === 'dashboard_pay') initDashboardPay();
   if (pageKey === 'reports') initReportsPage();
   if (pageKey === 'items') loadItemsMaster();
   if (pageKey === 'shops') loadShopsMaster();
@@ -719,6 +1000,7 @@ async function loadStockBalance() {
 
   const { items, summary } = res.data;
   state.stockItems = items || [];
+  state.stockPagination.filteredItems = items || [];
 
   // อัปเดตการ์ด KPI สรุปผล
   if (summary) {
@@ -726,19 +1008,55 @@ async function loadStockBalance() {
     document.getElementById('kpi-normal-count').textContent = summary.normal_count.toLocaleString();
     document.getElementById('kpi-low-count').textContent = summary.low_stock_count.toLocaleString();
     document.getElementById('kpi-out-count').textContent = summary.out_of_stock_count.toLocaleString();
-    document.getElementById('stock-total-val-footer').textContent = `มูลค่ารวมทั้งสิ้น: ${Number(summary.total_inventory_value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท`;
+    document.getElementById('stock-total-val-footer').textContent = `มูลค่ารวม: ${Number(summary.total_inventory_value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท`;
   }
 
-  // อัปเดตตารางรายการ
-  if (!items || items.length === 0) {
+  // Setup Autocomplete Suggestions for Stock Search Input
+  setupStockSearchAutocomplete();
+
+  // Render Table with Pagination
+  renderStockBalanceTable();
+}
+
+function renderStockBalanceTable() {
+  const tbody = document.getElementById('stock-table-body');
+  const items = state.stockPagination.filteredItems || [];
+  const pageSize = parseInt(document.getElementById('stock-page-size')?.value || '25', 10);
+  let page = state.stockPagination.page;
+
+  if (items.length === 0) {
     tbody.innerHTML = `<tr><td colspan="10" class="text-center py-8 text-slate-400">ไม่พบรายการพัสดุตามเงื่อนไขที่เลือก</td></tr>`;
-    document.getElementById('stock-table-footer').firstElementChild.textContent = 'แสดงทั้งหมด 0 รายการ';
+    document.getElementById('stock-pagination-info').textContent = 'แสดง 0-0 จาก 0 รายการ';
+    document.getElementById('stock-page-number').textContent = '1 / 1';
+    document.getElementById('stock-prev-page').disabled = true;
+    document.getElementById('stock-next-page').disabled = true;
     return;
   }
 
-  document.getElementById('stock-table-footer').firstElementChild.textContent = `แสดงทั้งหมด ${items.length} รายการ`;
+  let totalPages = 1;
+  let pageItems = items;
+  let startIdx = 0;
+  let endIdx = items.length;
 
-  tbody.innerHTML = items.map(item => {
+  if (pageSize > 0) {
+    totalPages = Math.ceil(items.length / pageSize) || 1;
+    if (page > totalPages) page = totalPages;
+    if (page < 1) page = 1;
+    state.stockPagination.page = page;
+
+    startIdx = (page - 1) * pageSize;
+    endIdx = Math.min(startIdx + pageSize, items.length);
+    pageItems = items.slice(startIdx, endIdx);
+  } else {
+    state.stockPagination.page = 1;
+  }
+
+  document.getElementById('stock-pagination-info').textContent = `แสดง ${startIdx + 1}-${endIdx} จาก ${items.length.toLocaleString()} รายการ`;
+  document.getElementById('stock-page-number').textContent = `${state.stockPagination.page} / ${totalPages}`;
+  document.getElementById('stock-prev-page').disabled = state.stockPagination.page <= 1;
+  document.getElementById('stock-next-page').disabled = state.stockPagination.page >= totalPages;
+
+  tbody.innerHTML = pageItems.map(item => {
     let badgeClass = 'badge-normal';
     let statusText = 'ปกติ';
     let statusIcon = 'fa-check';
@@ -782,27 +1100,273 @@ async function loadStockBalance() {
   }).join('');
 }
 
+function setupStockSearchAutocomplete() {
+  const input = document.getElementById('stock-search');
+  const suggestionsBox = document.getElementById('stock-search-suggestions');
+  if (!input || !suggestionsBox) return;
+
+  input.oninput = debounce(() => {
+    const val = input.value.trim().toLowerCase();
+    if (!val || val.length < 1) {
+      suggestionsBox.classList.add('hidden');
+      loadStockBalance();
+      return;
+    }
+
+    const matches = (state.stockItems || []).filter(i => 
+      (i.item_code || '').toLowerCase().includes(val) || 
+      (i.item_name || '').toLowerCase().includes(val)
+    ).slice(0, 10);
+
+    if (matches.length === 0) {
+      suggestionsBox.innerHTML = '<div class="p-3 text-center text-slate-400 text-xs">ไม่พบรายการพัสดุที่ตรงกัน</div>';
+      suggestionsBox.classList.remove('hidden');
+      return;
+    }
+
+    suggestionsBox.innerHTML = matches.map(item => `
+      <div class="p-2.5 hover:bg-emerald-50/70 cursor-pointer flex items-center justify-between transition border-b border-slate-100 last:border-none" onclick="selectStockAutocomplete('${item.item_code}')">
+        <div>
+          <span class="font-bold font-mono text-emerald-800 text-xs">${item.item_code}</span>
+          <span class="text-slate-800 ml-1.5 font-medium text-xs">${item.item_name}</span>
+          <span class="text-[11px] text-slate-400 block">${item.category}</span>
+        </div>
+        <div class="text-right">
+          <span class="font-bold font-mono text-xs ${item.balance_qty <= 0 ? 'text-rose-600' : 'text-slate-800'}">${Number(item.balance_qty).toLocaleString()} ${item.unit}</span>
+          <span class="text-[10px] text-slate-400 block">คงเหลือ</span>
+        </div>
+      </div>
+    `).join('');
+    suggestionsBox.classList.remove('hidden');
+  }, 200);
+
+  // Close when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!input.contains(e.target) && !suggestionsBox.contains(e.target)) {
+      suggestionsBox.classList.add('hidden');
+    }
+  });
+}
+
+function selectStockAutocomplete(itemCode) {
+  const input = document.getElementById('stock-search');
+  const suggestionsBox = document.getElementById('stock-search-suggestions');
+  if (input) input.value = itemCode;
+  if (suggestionsBox) suggestionsBox.classList.add('hidden');
+  loadStockBalance();
+}
+
 // ============================================================================
 // 6. Module 2: บันทึกรับเข้าพัสดุ (Buy)
 // ============================================================================
 
 async function initBuyPage() {
   document.getElementById('buy-doc-date').value = new Date().toISOString().slice(0, 10);
-  await populateItemDropdown('buy-item-code');
   await populateShopDropdown('buy-shop-name');
-  loadRecentBuys();
+  if (state.stockItems.length === 0) {
+    const res = await apiRequest('/api/public/stock');
+    if (res.ok && res.data.items) state.stockItems = res.data.items;
+  }
+  setupBuyItemAutocomplete();
+  state.buyCart = [];
+  renderBuyCart();
+  loadRecentBuys(1);
 }
 
-async function loadRecentBuys() {
-  const res = await apiRequest('/api/buys?limit=15');
+function setupBuyItemAutocomplete() {
+  const input = document.getElementById('buy-search-item');
+  const suggestionsBox = document.getElementById('buy-item-suggestions');
+  if (!input || !suggestionsBox) return;
+
+  input.oninput = debounce(() => {
+    const val = input.value.trim().toLowerCase();
+    if (!val) {
+      suggestionsBox.classList.add('hidden');
+      return;
+    }
+
+    const matches = (state.stockItems || []).filter(i => 
+      (i.item_code || '').toLowerCase().includes(val) || 
+      (i.item_name || '').toLowerCase().includes(val)
+    ).slice(0, 12);
+
+    if (matches.length === 0) {
+      suggestionsBox.innerHTML = '<div class="p-3 text-center text-slate-400 text-xs">ไม่พบรหัสพัสดุ</div>';
+      suggestionsBox.classList.remove('hidden');
+      return;
+    }
+
+    suggestionsBox.innerHTML = matches.map(item => `
+      <div class="p-2.5 hover:bg-emerald-50 cursor-pointer flex items-center justify-between transition border-b border-slate-100 last:border-none" onclick="selectBuyItem('${item.item_code}')">
+        <div>
+          <span class="font-bold font-mono text-emerald-800 text-xs">${item.item_code}</span>
+          <span class="text-slate-800 ml-1.5 font-medium text-xs">${item.item_name}</span>
+          <span class="text-[11px] text-slate-400 block">${item.category}</span>
+        </div>
+        <div class="text-right">
+          <span class="font-bold font-mono text-xs text-slate-700">${item.unit}</span>
+          <span class="text-[10px] text-emerald-600 block">คงเหลือ ${item.balance_qty}</span>
+        </div>
+      </div>
+    `).join('');
+    suggestionsBox.classList.remove('hidden');
+  }, 150);
+
+  document.addEventListener('click', (e) => {
+    if (!input.contains(e.target) && !suggestionsBox.contains(e.target)) {
+      suggestionsBox.classList.add('hidden');
+    }
+  });
+}
+
+function selectBuyItem(itemCode) {
+  const item = (state.stockItems || []).find(i => i.item_code === itemCode);
+  if (!item) return;
+
+  document.getElementById('buy-search-item').value = `${item.item_code} : ${item.item_name}`;
+  document.getElementById('buy-item-code').value = item.item_code;
+  document.getElementById('buy-item-suggestions').classList.add('hidden');
+
+  const infoBox = document.getElementById('buy-item-info');
+  infoBox.classList.remove('hidden');
+  document.getElementById('buy-preview-name').textContent = item.item_name;
+  document.getElementById('buy-preview-cat').textContent = item.category;
+  document.getElementById('buy-preview-unit').textContent = item.unit;
+
+  // Auto-focus quantity input
+  document.getElementById('buy-qty').focus();
+}
+
+function clearBuyItemInputs() {
+  document.getElementById('buy-search-item').value = '';
+  document.getElementById('buy-item-code').value = '';
+  document.getElementById('buy-qty').value = '';
+  document.getElementById('buy-price').value = '';
+  document.getElementById('buy-total-price').value = '';
+  document.getElementById('buy-item-info').classList.add('hidden');
+  document.getElementById('buy-item-suggestions').classList.add('hidden');
+}
+
+function renderBuyCart() {
+  const tbody = document.getElementById('buy-cart-table-body');
+  const badge = document.getElementById('buy-cart-total-badge');
+  const countSpan = document.getElementById('buy-cart-count');
+  const submitText = document.getElementById('btn-submit-buy-text');
+
+  countSpan.textContent = state.buyCart.length;
+
+  if (state.buyCart.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" class="p-3 text-center text-slate-400">ยังไม่มีรายการในบิลนี้ (กด "+ เพิ่มรายการลงในบิลนี้" หรือกดบันทึกรายการเดียวได้ทันที)</td></tr>`;
+    badge.textContent = '0.00 บาท';
+    if (submitText) submitText.textContent = 'บันทึกรับเข้าพัสดุ';
+    return;
+  }
+
+  let grandTotal = 0;
+  tbody.innerHTML = state.buyCart.map((item, idx) => {
+    grandTotal += item.total_price;
+    return `
+      <tr class="hover:bg-slate-50 border-b border-slate-100">
+        <td class="p-1.5 font-medium text-slate-800">
+          <span class="font-mono text-emerald-700 font-bold">${item.item_code}</span>: ${item.item_name}
+        </td>
+        <td class="p-1.5 text-right font-mono text-slate-700">${Number(item.quantity).toLocaleString()} ${item.unit}</td>
+        <td class="p-1.5 text-right font-mono font-bold text-slate-900">${Number(item.total_price).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+        <td class="p-1.5 text-center">
+          <button type="button" onclick="removeBuyCartItem(${idx})" class="text-rose-500 hover:text-rose-700 text-xs p-1" title="ลบรายการ">
+            <i class="fa-solid fa-trash-can"></i>
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  badge.textContent = `${Number(grandTotal).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท`;
+  if (submitText) submitText.textContent = `บันทึกรับเข้าพัสดุทั้งบิล (${state.buyCart.length} รายการ)`;
+}
+
+function addBuyItemToCart() {
+  const itemCode = document.getElementById('buy-item-code').value;
+  const qty = parseFloat(document.getElementById('buy-qty').value) || 0;
+  let price = parseFloat(document.getElementById('buy-price').value) || 0;
+  let total = parseFloat(document.getElementById('buy-total-price').value) || 0;
+
+  if (!itemCode) {
+    showToast('กรุณาเลือกรายการพัสดุก่อนเพิ่มลงในบิล', 'warning');
+    return;
+  }
+  if (qty <= 0) {
+    showToast('กรุณาระบุจำนวนที่รับเข้าให้มากกว่า 0', 'warning');
+    return;
+  }
+  if (total <= 0 && price <= 0) {
+    showToast('กรุณาระบุราคาต่อหน่วย หรือราคารวม', 'warning');
+    return;
+  }
+
+  if (total > 0 && price === 0) {
+    price = Math.round((total / qty) * 10000) / 10000;
+  } else if (price > 0 && total === 0) {
+    total = Math.round(qty * price * 100) / 100;
+  }
+
+  const stock = (state.stockItems || []).find(i => i.item_code === itemCode);
+
+  state.buyCart.push({
+    item_code: itemCode,
+    item_name: stock ? stock.item_name : itemCode,
+    category: stock ? stock.category : '',
+    unit: stock ? stock.unit : 'หน่วย',
+    quantity: qty,
+    price_per_unit: price,
+    total_price: total
+  });
+
+  clearBuyItemInputs();
+  renderBuyCart();
+  showToast(`เพิ่มรายการ "${itemCode}" ลงในบิลแล้ว`, 'info');
+}
+
+function removeBuyCartItem(index) {
+  state.buyCart.splice(index, 1);
+  renderBuyCart();
+}
+
+async function loadRecentBuys(page = 1) {
+  state.buysPagination.page = page;
+  const pageSize = parseInt(document.getElementById('buys-page-size')?.value || '15', 10);
+  const search = document.getElementById('buys-history-search')?.value.trim() || '';
+
   const tbody = document.getElementById('recent-buys-table-body');
+  tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-1"></i> กำลังโหลดประวัติ...</td></tr>`;
+
+  const query = new URLSearchParams();
+  query.append('page', page);
+  query.append('limit', pageSize);
+  if (search) query.append('q', search);
+
+  const res = await apiRequest(`/api/buys?${query.toString()}`);
   if (!res.ok || !res.data.buys) {
     tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400">ยังไม่มีประวัติการรับเข้า</td></tr>`;
     return;
   }
 
-  const buys = res.data.buys;
+  const { buys, total = 0, total_pages = 1 } = res.data;
   state.recentBuys = buys;
+  state.buysPagination.total = total;
+  state.buysPagination.totalPages = total_pages;
+
+  const startIdx = (page - 1) * pageSize;
+  const endIdx = Math.min(startIdx + buys.length, total);
+  document.getElementById('buys-pagination-info').textContent = `แสดง ${total > 0 ? startIdx + 1 : 0}-${endIdx} จาก ${total.toLocaleString()} รายการ`;
+  document.getElementById('buys-page-number').textContent = `${page} / ${total_pages}`;
+  document.getElementById('buys-prev-page').disabled = page <= 1;
+  document.getElementById('buys-next-page').disabled = page >= total_pages;
+
+  if (buys.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400">ไม่พบประวัติการรับเข้า</td></tr>`;
+    return;
+  }
 
   tbody.innerHTML = buys.map(b => `
     <tr class="hover:bg-slate-50 border-b border-slate-100">
@@ -825,20 +1389,372 @@ async function loadRecentBuys() {
 
 async function initPayPage() {
   document.getElementById('pay-doc-date').value = new Date().toISOString().slice(0, 10);
-  await populateItemDropdown('pay-item-code');
-  loadRecentPays();
+  if (state.stockItems.length === 0) {
+    const res = await apiRequest('/api/public/stock');
+    if (res.ok && res.data.items) state.stockItems = res.data.items;
+  }
+  setupPayItemAutocomplete();
+  state.payCart = [];
+  renderPayCart();
+  loadRecentPays(1);
 }
 
-async function loadRecentPays() {
-  const res = await apiRequest('/api/pays?limit=15');
+function setupPayItemAutocomplete() {
+  const input = document.getElementById('pay-search-item');
+  const suggestionsBox = document.getElementById('pay-item-suggestions');
+  if (!input || !suggestionsBox) return;
+
+  input.oninput = debounce(() => {
+    const val = input.value.trim().toLowerCase();
+    if (!val) {
+      suggestionsBox.classList.add('hidden');
+      return;
+    }
+
+    const matches = (state.stockItems || []).filter(i => 
+      (i.item_code || '').toLowerCase().includes(val) || 
+      (i.item_name || '').toLowerCase().includes(val)
+    ).slice(0, 12);
+
+    if (matches.length === 0) {
+      suggestionsBox.innerHTML = '<div class="p-3 text-center text-slate-400 text-xs">ไม่พบรหัสพัสดุ</div>';
+      suggestionsBox.classList.remove('hidden');
+      return;
+    }
+
+    suggestionsBox.innerHTML = matches.map(item => `
+      <div class="p-2.5 hover:bg-teal-50 cursor-pointer flex items-center justify-between transition border-b border-slate-100 last:border-none" onclick="selectPayItem('${item.item_code}')">
+        <div>
+          <span class="font-bold font-mono text-teal-800 text-xs">${item.item_code}</span>
+          <span class="text-slate-800 ml-1.5 font-medium text-xs">${item.item_name}</span>
+          <span class="text-[11px] text-slate-400 block">${item.category}</span>
+        </div>
+        <div class="text-right">
+          <span class="font-bold font-mono text-xs ${item.balance_qty <= 0 ? 'text-rose-600' : 'text-teal-700'}">${item.balance_qty} ${item.unit}</span>
+          <span class="text-[10px] text-slate-400 block">คงเหลือ</span>
+        </div>
+      </div>
+    `).join('');
+    suggestionsBox.classList.remove('hidden');
+  }, 150);
+
+  document.addEventListener('click', (e) => {
+    if (!input.contains(e.target) && !suggestionsBox.contains(e.target)) {
+      suggestionsBox.classList.add('hidden');
+    }
+  });
+}
+
+function selectPayItem(itemCode) {
+  const item = (state.stockItems || []).find(i => i.item_code === itemCode);
+  if (!item) return;
+
+  document.getElementById('pay-search-item').value = `${item.item_code} : ${item.item_name}`;
+  document.getElementById('pay-item-code').value = item.item_code;
+  document.getElementById('pay-item-suggestions').classList.add('hidden');
+
+  const alertBox = document.getElementById('pay-stock-alert-box');
+  alertBox.classList.remove('hidden');
+  document.getElementById('pay-preview-name').textContent = item.item_name;
+  document.getElementById('pay-current-stock-badge').textContent = `คงเหลือ ${item.balance_qty} ${item.unit}`;
+  document.getElementById('pay-current-avg-price').textContent = Number(item.avg_unit_price || 0).toFixed(2);
+  document.getElementById('pay-current-min-stock').textContent = item.min_stock;
+
+  // Set default price from average price
+  if (item.avg_unit_price) {
+    document.getElementById('pay-price').value = item.avg_unit_price;
+  }
+
+  validatePayQuantity();
+  document.getElementById('pay-qty').focus();
+}
+
+function clearPayItemInputs() {
+  document.getElementById('pay-search-item').value = '';
+  document.getElementById('pay-item-code').value = '';
+  document.getElementById('pay-qty').value = '';
+  document.getElementById('pay-price').value = '';
+  document.getElementById('pay-total-price').value = '';
+  document.getElementById('pay-stock-alert-box').classList.add('hidden');
+  document.getElementById('pay-item-suggestions').classList.add('hidden');
+  const warn = document.getElementById('pay-insufficient-warning');
+  if (warn) warn.classList.add('hidden');
+}
+
+function validatePayQuantity() {
+  const itemCode = document.getElementById('pay-item-code')?.value;
+  const qtyInput = document.getElementById('pay-qty');
+  const qty = parseFloat(qtyInput?.value) || 0;
+  const warningBox = document.getElementById('pay-insufficient-warning');
+  const warningText = document.getElementById('pay-warning-text');
+  const submitBtn = document.getElementById('btn-submit-pay');
+  const addCartBtn = document.getElementById('btn-pay-add-item-to-cart');
+
+  if (!itemCode) {
+    if (warningBox) warningBox.classList.add('hidden');
+    if (submitBtn) submitBtn.disabled = false;
+    if (addCartBtn) addCartBtn.disabled = false;
+    return;
+  }
+
+  const stock = (state.stockItems || []).find(s => s.item_code === itemCode);
+  const currentBalance = stock ? Number(stock.balance_qty) : 0;
+  const unit = stock ? stock.unit : 'หน่วย';
+
+  // Calculate quantity already committed in cart for this item
+  const committedInCart = state.payCart
+    .filter(i => i.item_code === itemCode)
+    .reduce((sum, i) => sum + i.quantity, 0);
+
+  const totalRequested = qty + committedInCart;
+
+  if (totalRequested > currentBalance) {
+    if (warningBox) {
+      warningBox.classList.remove('hidden');
+      if (warningText) warningText.textContent = `ยอดที่ขอเบิกรวม (${totalRequested} ${unit}) เกินคงเหลือจริงในคลัง (${currentBalance} ${unit}) ระบบไม่อนุญาตให้ติดลบ`;
+    }
+    if (addCartBtn) addCartBtn.disabled = true;
+    if (state.payCart.length === 0 && submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    }
+  } else {
+    if (warningBox) warningBox.classList.add('hidden');
+    if (addCartBtn) addCartBtn.disabled = false;
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    }
+  }
+}
+
+function renderPayCart() {
+  const tbody = document.getElementById('pay-cart-table-body');
+  const badge = document.getElementById('pay-cart-total-badge');
+  const countSpan = document.getElementById('pay-cart-count');
+  const submitText = document.getElementById('btn-submit-pay-text');
+
+  countSpan.textContent = state.payCart.length;
+
+  if (state.payCart.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" class="p-3 text-center text-slate-400">ยังไม่มีรายการในใบเบิกนี้ (กด "+ เพิ่มรายการลงในใบเบิกนี้" หรือดึงจากบิลรับเข้า)</td></tr>`;
+    badge.textContent = '0.00 บาท';
+    if (submitText) submitText.textContent = 'บันทึกเบิกจ่ายพัสดุ';
+    return;
+  }
+
+  let grandTotal = 0;
+  tbody.innerHTML = state.payCart.map((item, idx) => {
+    grandTotal += item.total_price;
+    return `
+      <tr class="hover:bg-slate-50 border-b border-slate-100">
+        <td class="p-1.5 font-medium text-slate-800">
+          <span class="font-mono text-teal-700 font-bold">${item.item_code}</span>: ${item.item_name}
+        </td>
+        <td class="p-1.5 text-right font-mono text-slate-700">${Number(item.quantity).toLocaleString()} ${item.unit}</td>
+        <td class="p-1.5 text-right font-mono font-bold text-slate-900">${Number(item.total_price).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+        <td class="p-1.5 text-center">
+          <button type="button" onclick="removePayCartItem(${idx})" class="text-rose-500 hover:text-rose-700 text-xs p-1" title="ลบรายการ">
+            <i class="fa-solid fa-trash-can"></i>
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  badge.textContent = `${Number(grandTotal).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท`;
+  if (submitText) submitText.textContent = `บันทึกเบิกจ่ายพัสดุทั้งใบเบิก (${state.payCart.length} รายการ)`;
+}
+
+function addPayItemToCart() {
+  const itemCode = document.getElementById('pay-item-code').value;
+  const qty = parseFloat(document.getElementById('pay-qty').value) || 0;
+  let price = parseFloat(document.getElementById('pay-price').value) || 0;
+  let total = parseFloat(document.getElementById('pay-total-price').value) || 0;
+
+  if (!itemCode) {
+    showToast('กรุณาเลือกรายการพัสดุก่อน', 'warning');
+    return;
+  }
+  if (qty <= 0) {
+    showToast('กรุณาระบุจำนวนที่เบิกให้มากกว่า 0', 'warning');
+    return;
+  }
+
+  const stock = (state.stockItems || []).find(i => i.item_code === itemCode);
+  const currentBalance = stock ? Number(stock.balance_qty) : 0;
+  const alreadyInCart = state.payCart.filter(i => i.item_code === itemCode).reduce((s, i) => s + i.quantity, 0);
+
+  if (qty + alreadyInCart > currentBalance) {
+    showToast(`จำนวนที่ขอเบิกรวม (${qty + alreadyInCart}) เกินยอดคงเหลือจริง (${currentBalance}) ไม่สามารถติดลบได้`, 'error');
+    return;
+  }
+
+  if (total > 0 && price === 0) {
+    price = Math.round((total / qty) * 10000) / 10000;
+  } else if (price > 0 && total === 0) {
+    total = Math.round(qty * price * 100) / 100;
+  } else if (price === 0 && total === 0 && stock) {
+    price = stock.avg_unit_price || 0;
+    total = Math.round(qty * price * 100) / 100;
+  }
+
+  state.payCart.push({
+    item_code: itemCode,
+    item_name: stock ? stock.item_name : itemCode,
+    category: stock ? stock.category : '',
+    unit: stock ? stock.unit : 'หน่วย',
+    quantity: qty,
+    price_per_unit: price,
+    total_price: total
+  });
+
+  clearPayItemInputs();
+  renderPayCart();
+  showToast(`เพิ่มรายการ "${itemCode}" ลงในใบเบิกแล้ว`, 'info');
+}
+
+function removePayCartItem(index) {
+  state.payCart.splice(index, 1);
+  renderPayCart();
+  validatePayQuantity();
+}
+
+// Pull Recent Buy Bill Modal Logic
+async function openPullBuyModal() {
+  const select = document.getElementById('pull-buy-bill-select');
+  const detailsBox = document.getElementById('pull-buy-bill-details');
+  const confirmBtn = document.getElementById('btn-confirm-pull-buy');
+
+  select.innerHTML = '<option value="">-- กำลังโหลดรายการบิลล่าสุด... --</option>';
+  detailsBox.classList.add('hidden');
+  confirmBtn.disabled = true;
+  state.selectedPullBill = null;
+
+  openModal('pull-buy-modal');
+
+  const res = await apiRequest('/api/buys/recent-bills');
+  if (!res.ok || !res.data.bills || res.data.bills.length === 0) {
+    select.innerHTML = '<option value="">-- ไม่พบบิลรับเข้าล่าสุด --</option>';
+    return;
+  }
+
+  const bills = res.data.bills;
+  select.innerHTML = '<option value="">-- เลือกบิลรับเข้าที่ต้องการดึงยอด --</option>' + bills.map(b => `
+    <option value="${b.doc_no}">
+      ${b.doc_no} | วันที่: ${b.doc_date} | ร้าน: ${b.shop_name} | รวม ${Number(b.total_price).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บ. (${b.item_count} รายการ)
+    </option>
+  `).join('');
+
+  select.onchange = async () => {
+    const docNo = select.value;
+    if (!docNo) {
+      detailsBox.classList.add('hidden');
+      confirmBtn.disabled = true;
+      state.selectedPullBill = null;
+      return;
+    }
+
+    const billRes = await apiRequest(`/api/buys/by-bill/${encodeURIComponent(docNo)}`);
+    if (!billRes.ok || !billRes.data.items) {
+      showToast('ไม่สามารถโหลดข้อมูลบิลนี้ได้', 'error');
+      return;
+    }
+
+    const billData = billRes.data;
+    state.selectedPullBill = billData;
+
+    document.getElementById('pull-buy-info-docno').textContent = billData.doc_no;
+    document.getElementById('pull-buy-info-date').textContent = billData.doc_date;
+    document.getElementById('pull-buy-info-shop').textContent = billData.shop_name;
+    document.getElementById('pull-buy-info-total').textContent = `${Number(billData.total_price).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท`;
+    document.getElementById('pull-buy-items-count').textContent = billData.items.length;
+
+    const tbody = document.getElementById('pull-buy-items-tbody');
+    tbody.innerHTML = billData.items.map(it => `
+      <tr class="hover:bg-slate-50 border-b border-slate-100">
+        <td class="p-2 font-medium text-slate-800"><span class="font-mono text-teal-700 font-bold">${it.item_code}</span>: ${it.item_name}</td>
+        <td class="p-2 text-right font-mono">${Number(it.quantity).toLocaleString()} ${it.unit}</td>
+        <td class="p-2 text-right font-mono">${Number(it.price_per_unit).toFixed(2)}</td>
+        <td class="p-2 text-right font-mono font-bold text-slate-900">${Number(it.total_price).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+      </tr>
+    `).join('');
+
+    detailsBox.classList.remove('hidden');
+    confirmBtn.disabled = false;
+  };
+}
+
+function confirmPullBuyBill() {
+  if (!state.selectedPullBill || !state.selectedPullBill.items) return;
+
+  const bill = state.selectedPullBill;
+  let addedCount = 0;
+
+  bill.items.forEach(it => {
+    state.payCart.push({
+      item_code: it.item_code,
+      item_name: it.item_name,
+      category: it.category || '',
+      unit: it.unit || 'หน่วย',
+      quantity: Number(it.quantity),
+      price_per_unit: Number(it.price_per_unit),
+      total_price: Number(it.total_price)
+    });
+    addedCount++;
+  });
+
+  // Suggest requisition doc_no if currently empty
+  const docNoInput = document.getElementById('pay-doc-no');
+  if (!docNoInput.value.trim()) {
+    docNoInput.value = `REQ-${bill.doc_no}`;
+  }
+
+  const remarkInput = document.getElementById('pay-remark');
+  if (!remarkInput.value.trim()) {
+    remarkInput.value = `เบิกจ่ายตามบิลรับเข้า ${bill.doc_no} (${bill.shop_name})`;
+  }
+
+  closeModal('pull-buy-modal');
+  renderPayCart();
+  showToast(`ดึงรายการจากบิล ${bill.doc_no} เข้าสู่ใบเบิกแล้ว (${addedCount} รายการ)`, 'success');
+}
+
+async function loadRecentPays(page = 1) {
+  state.paysPagination.page = page;
+  const pageSize = parseInt(document.getElementById('pays-page-size')?.value || '15', 10);
+  const search = document.getElementById('pays-history-search')?.value.trim() || '';
+
   const tbody = document.getElementById('recent-pays-table-body');
+  tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-1"></i> กำลังโหลดประวัติ...</td></tr>`;
+
+  const query = new URLSearchParams();
+  query.append('page', page);
+  query.append('limit', pageSize);
+  if (search) query.append('q', search);
+
+  const res = await apiRequest(`/api/pays?${query.toString()}`);
   if (!res.ok || !res.data.pays) {
     tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400">ยังไม่มีประวัติการเบิกจ่าย</td></tr>`;
     return;
   }
 
-  const pays = res.data.pays;
+  const { pays, total = 0, total_pages = 1 } = res.data;
   state.recentPays = pays;
+  state.paysPagination.total = total;
+  state.paysPagination.totalPages = total_pages;
+
+  const startIdx = (page - 1) * pageSize;
+  const endIdx = Math.min(startIdx + pays.length, total);
+  document.getElementById('pays-pagination-info').textContent = `แสดง ${total > 0 ? startIdx + 1 : 0}-${endIdx} จาก ${total.toLocaleString()} รายการ`;
+  document.getElementById('pays-page-number').textContent = `${page} / ${total_pages}`;
+  document.getElementById('pays-prev-page').disabled = page <= 1;
+  document.getElementById('pays-next-page').disabled = page >= total_pages;
+
+  if (pays.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400">ไม่พบประวัติการเบิกจ่าย</td></tr>`;
+    return;
+  }
 
   tbody.innerHTML = pays.map(p => `
     <tr class="hover:bg-slate-50 border-b border-slate-100">
@@ -853,40 +1769,6 @@ async function loadRecentPays() {
       <td class="py-2.5 px-3 text-slate-700 font-medium truncate max-w-xs">${p.department}</td>
     </tr>
   `).join('');
-}
-
-/**
- * Real-time Stock Negative Prevention Validation บนหน้าจอ Pay
- */
-function validatePayQuantity() {
-  const itemCode = document.getElementById('pay-item-code').value;
-  const qtyInput = document.getElementById('pay-qty');
-  const qty = parseFloat(qtyInput.value) || 0;
-  const warningBox = document.getElementById('pay-insufficient-warning');
-  const warningText = document.getElementById('pay-warning-text');
-  const submitBtn = document.getElementById('btn-submit-pay');
-
-  if (!itemCode) {
-    warningBox.classList.add('hidden');
-    submitBtn.disabled = false;
-    return;
-  }
-
-  const stock = state.stockItems.find(s => s.item_code === itemCode);
-  const currentBalance = stock ? Number(stock.balance_qty) : 0;
-  const unit = stock ? stock.unit : 'หน่วย';
-
-  if (qty > currentBalance) {
-    // แจ้งเตือนสีแดงทันที และปิดปุ่มกดส่ง
-    warningBox.classList.remove('hidden');
-    warningText.textContent = `จำนวนที่ขอเบิก (${qty} ${unit}) เกินยอดคงเหลือจริงในคลัง (คงเหลือเพียง ${currentBalance} ${unit}) ไม่สามารถบันทึกติดลบได้`;
-    submitBtn.disabled = true;
-    submitBtn.classList.add('opacity-50', 'cursor-not-allowed');
-  } else {
-    warningBox.classList.add('hidden');
-    submitBtn.disabled = false;
-    submitBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-  }
 }
 
 // ============================================================================
@@ -1114,19 +1996,55 @@ async function loadUsersManagement() {
             <i class="fa-solid fa-sliders mr-1 text-slate-500"></i> สิทธิ (${Object.keys(u.permissions || {}).length} หน้า)
           </button>
         </td>
-        <td class="py-3 px-4 text-center space-x-2">
-          ${u.id !== 1 ? `
-            <button onclick="toggleUserStatus(${u.id})" class="text-xs ${u.is_active === 1 ? 'text-rose-600 hover:text-rose-800' : 'text-emerald-600 hover:text-emerald-800'} font-medium">
-              ${u.is_active === 1 ? '<i class="fa-solid fa-ban"></i> ระงับ' : '<i class="fa-solid fa-check"></i> เปิดใช้'}
-            </button>
-          ` : '<span class="text-xs text-slate-400">บัญชีหลัก</span>'}
-          <button onclick="openResetPasswordModal(${u.id}, '${u.username}')" class="text-xs text-slate-600 hover:text-slate-900 font-medium">
-            <i class="fa-solid fa-key"></i> รีเซ็ตรหัส
+        <td class="py-3 px-4 text-center space-x-1 whitespace-nowrap">
+          <button onclick="openEditUserModal(${u.id})" class="text-xs bg-amber-50 hover:bg-amber-100 text-amber-800 px-2 py-1 rounded border border-amber-200 font-medium transition" title="แก้ไขข้อมูล">
+            <i class="fa-solid fa-user-pen"></i> แก้ไข
           </button>
+          <button onclick="openResetPasswordModal(${u.id}, '${u.username}')" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded border border-slate-300 font-medium transition" title="รีเซ็ตรหัส">
+            <i class="fa-solid fa-key"></i>
+          </button>
+          ${u.id !== 1 ? `
+            <button onclick="toggleUserStatus(${u.id})" class="text-xs ${u.is_active === 1 ? 'bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-200' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-200'} px-1.5 py-1 rounded border font-medium transition" title="ระงับ/เปิดใช้">
+              ${u.is_active === 1 ? '<i class="fa-solid fa-ban"></i>' : '<i class="fa-solid fa-check"></i>'}
+            </button>
+            <button onclick="openDeleteUserModal(${u.id})" class="text-xs bg-rose-50 hover:bg-rose-100 text-rose-700 px-2 py-1 rounded border border-rose-200 font-medium transition" title="ลบผู้ใช้">
+              <i class="fa-solid fa-trash-can"></i> ลบ
+            </button>
+          ` : '<span class="text-[11px] text-slate-400 font-mono px-1">หลัก</span>'}
         </td>
       </tr>
     `;
   }).join('');
+}
+
+function openEditUserModal(userId) {
+  const user = state.users.find(u => u.id === userId);
+  if (!user) return;
+
+  document.getElementById('edit-user-id').value = user.id;
+  document.getElementById('edit-user-username').value = user.username;
+  document.getElementById('edit-user-fullname').value = user.fullname;
+  document.getElementById('edit-user-role').value = user.role;
+  document.getElementById('edit-user-dept').value = user.department;
+  document.getElementById('edit-user-password').value = '';
+
+  openModal('user-edit-modal');
+}
+
+function openDeleteUserModal(userId) {
+  const user = state.users.find(u => u.id === userId);
+  if (!user) return;
+  if (user.id === 1) {
+    showToast('ไม่อนุญาตให้ลบผู้ดูแลระบบสูงสุด id=1', 'error');
+    return;
+  }
+
+  document.getElementById('delete-user-id').value = user.id;
+  document.getElementById('delete-user-name').textContent = user.fullname;
+  document.getElementById('delete-user-username').textContent = user.username;
+  document.getElementById('delete-user-dept').textContent = user.department;
+
+  openModal('user-delete-modal');
 }
 
 function openEditPermissionModal(userId) {
@@ -1177,6 +2095,303 @@ async function toggleUserStatus(userId) {
   } else {
     showToast(res.data.message || 'เกิดข้อผิดพลาด', 'error');
   }
+}
+
+// ============================================================================
+// 10.1 Module 8: แดชบอร์ดสรุปยอดรับเข้าพัสดุ (Inbound Dashboard)
+// ============================================================================
+
+function initDashboardBuy() {
+  const filterType = document.getElementById('dash-buy-filter-type');
+  const fyBox = document.getElementById('dash-buy-fy-box');
+  const yearBox = document.getElementById('dash-buy-year-box');
+  const monthBox = document.getElementById('dash-buy-month-box');
+  const rangeBox = document.getElementById('dash-buy-range-box');
+
+  function updateFilterVisibility() {
+    const val = filterType.value;
+    fyBox.classList.toggle('hidden', val !== 'fiscal_year');
+    yearBox.classList.toggle('hidden', val !== 'year' && val !== 'month');
+    monthBox.classList.toggle('hidden', val !== 'month');
+    rangeBox.classList.toggle('hidden', val !== 'range');
+  }
+
+  if (filterType) filterType.onchange = updateFilterVisibility;
+  updateFilterVisibility();
+
+  // Set default dates
+  const now = new Date();
+  const startEl = document.getElementById('dash-buy-start-date');
+  const endEl = document.getElementById('dash-buy-end-date');
+  if (startEl) startEl.value = `${now.getFullYear()}-01-01`;
+  if (endEl) endEl.value = now.toISOString().slice(0, 10);
+
+  loadDashboardBuy();
+}
+
+async function loadDashboardBuy() {
+  const filterType = document.getElementById('dash-buy-filter-type')?.value || 'fiscal_year';
+  const fy = document.getElementById('dash-buy-fiscal-year')?.value || '2569';
+  const year = document.getElementById('dash-buy-year')?.value || '2026';
+  const month = document.getElementById('dash-buy-month')?.value || '01';
+  const startDate = document.getElementById('dash-buy-start-date')?.value || '';
+  const endDate = document.getElementById('dash-buy-end-date')?.value || '';
+
+  const query = new URLSearchParams();
+  query.append('type', filterType);
+  if (filterType === 'fiscal_year') query.append('fiscal_year', fy);
+  else if (filterType === 'year') query.append('year', year);
+  else if (filterType === 'month') {
+    query.append('year', year);
+    query.append('month', month);
+  } else if (filterType === 'range') {
+    query.append('start_date', startDate);
+    query.append('end_date', endDate);
+  }
+
+  const res = await apiRequest(`/api/reports/dashboard-buys?${query.toString()}`);
+  if (!res.ok || !res.data) {
+    showToast('เกิดข้อผิดพลาดในการโหลดข้อมูล Dashboard รับเข้า', 'error');
+    return;
+  }
+
+  const { filter, kpis, monthly_trend = [], categories = [], top_shops = [], top_items = [] } = res.data;
+
+  // Period display
+  if (filter) {
+    const pEl = document.getElementById('dash-buy-period-display');
+    if (pEl) pEl.textContent = `${filter.start_date} ถึง ${filter.end_date}`;
+  }
+
+  // KPIs
+  if (kpis) {
+    document.getElementById('dash-buy-kpi-val').textContent = `${Number(kpis.total_value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บ.`;
+    document.getElementById('dash-buy-kpi-items').textContent = Number(kpis.total_items || 0).toLocaleString();
+    document.getElementById('dash-buy-kpi-docs').textContent = Number(kpis.total_docs || 0).toLocaleString();
+    document.getElementById('dash-buy-kpi-shops').textContent = Number(kpis.total_shops || 0).toLocaleString();
+  }
+
+  // Monthly Trend Chart
+  renderDashboardTrendChart('dash-buy-chart-container', monthly_trend, 'emerald');
+
+  // Categories Breakdown
+  const catTbody = document.getElementById('dash-buy-categories-tbody');
+  if (catTbody) {
+    if (categories.length === 0) {
+      catTbody.innerHTML = '<tr><td colspan="3" class="p-4 text-center text-slate-400">ไม่มีข้อมูล</td></tr>';
+    } else {
+      catTbody.innerHTML = categories.map(c => `
+        <tr class="hover:bg-slate-50 border-b border-slate-100">
+          <td class="p-2 font-medium text-slate-800">${c.category}</td>
+          <td class="p-2 text-right font-mono text-slate-600">${Number(c.count).toLocaleString()}</td>
+          <td class="p-2 text-right font-mono font-bold text-emerald-800">${Number(c.total_val).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+        </tr>
+      `).join('');
+    }
+  }
+
+  // Top Shops Breakdown
+  const shopTbody = document.getElementById('dash-buy-shops-tbody');
+  if (shopTbody) {
+    if (top_shops.length === 0) {
+      shopTbody.innerHTML = '<tr><td colspan="3" class="p-4 text-center text-slate-400">ไม่มีข้อมูล</td></tr>';
+    } else {
+      shopTbody.innerHTML = top_shops.map(s => `
+        <tr class="hover:bg-slate-50 border-b border-slate-100">
+          <td class="p-2 font-medium text-slate-800">${s.shop_name}</td>
+          <td class="p-2 text-right font-mono text-slate-600">${Number(s.doc_count).toLocaleString()}</td>
+          <td class="p-2 text-right font-mono font-bold text-slate-900">${Number(s.total_val).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+        </tr>
+      `).join('');
+    }
+  }
+
+  // Top 10 Items
+  const itemsTbody = document.getElementById('dash-buy-topitems-tbody');
+  if (itemsTbody) {
+    if (top_items.length === 0) {
+      itemsTbody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-slate-400">ไม่มีข้อมูล</td></tr>';
+    } else {
+      itemsTbody.innerHTML = top_items.map(i => `
+        <tr class="hover:bg-slate-50 border-b border-slate-100">
+          <td class="p-2.5 font-mono font-bold text-slate-900">${i.item_code}</td>
+          <td class="p-2.5 font-medium text-slate-800">${i.item_name}</td>
+          <td class="p-2.5 text-slate-600">${i.category}</td>
+          <td class="p-2.5 text-right font-mono font-semibold text-emerald-700">${Number(i.total_qty).toLocaleString()}</td>
+          <td class="p-2.5 text-center text-slate-600">${i.unit}</td>
+          <td class="p-2.5 text-right font-mono font-bold text-slate-900">${Number(i.total_val).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+        </tr>
+      `).join('');
+    }
+  }
+}
+
+// ============================================================================
+// 10.2 Module 9: แดชบอร์ดสรุปยอดเบิกจ่ายพัสดุ (Outbound Dashboard)
+// ============================================================================
+
+function initDashboardPay() {
+  const filterType = document.getElementById('dash-pay-filter-type');
+  const fyBox = document.getElementById('dash-pay-fy-box');
+  const yearBox = document.getElementById('dash-pay-year-box');
+  const monthBox = document.getElementById('dash-pay-month-box');
+  const rangeBox = document.getElementById('dash-pay-range-box');
+
+  function updateFilterVisibility() {
+    const val = filterType.value;
+    fyBox.classList.toggle('hidden', val !== 'fiscal_year');
+    yearBox.classList.toggle('hidden', val !== 'year' && val !== 'month');
+    monthBox.classList.toggle('hidden', val !== 'month');
+    rangeBox.classList.toggle('hidden', val !== 'range');
+  }
+
+  if (filterType) filterType.onchange = updateFilterVisibility;
+  updateFilterVisibility();
+
+  // Set default dates
+  const now = new Date();
+  const startEl = document.getElementById('dash-pay-start-date');
+  const endEl = document.getElementById('dash-pay-end-date');
+  if (startEl) startEl.value = `${now.getFullYear()}-01-01`;
+  if (endEl) endEl.value = now.toISOString().slice(0, 10);
+
+  loadDashboardPay();
+}
+
+async function loadDashboardPay() {
+  const filterType = document.getElementById('dash-pay-filter-type')?.value || 'fiscal_year';
+  const fy = document.getElementById('dash-pay-fiscal-year')?.value || '2569';
+  const year = document.getElementById('dash-pay-year')?.value || '2026';
+  const month = document.getElementById('dash-pay-month')?.value || '01';
+  const startDate = document.getElementById('dash-pay-start-date')?.value || '';
+  const endDate = document.getElementById('dash-pay-end-date')?.value || '';
+
+  const query = new URLSearchParams();
+  query.append('type', filterType);
+  if (filterType === 'fiscal_year') query.append('fiscal_year', fy);
+  else if (filterType === 'year') query.append('year', year);
+  else if (filterType === 'month') {
+    query.append('year', year);
+    query.append('month', month);
+  } else if (filterType === 'range') {
+    query.append('start_date', startDate);
+    query.append('end_date', endDate);
+  }
+
+  const res = await apiRequest(`/api/reports/dashboard-pays?${query.toString()}`);
+  if (!res.ok || !res.data) {
+    showToast('เกิดข้อผิดพลาดในการโหลดข้อมูล Dashboard เบิกจ่าย', 'error');
+    return;
+  }
+
+  const { filter, kpis, monthly_trend = [], departments = [], categories = [], top_items = [] } = res.data;
+
+  // Period display
+  if (filter) {
+    const pEl = document.getElementById('dash-pay-period-display');
+    if (pEl) pEl.textContent = `${filter.start_date} ถึง ${filter.end_date}`;
+  }
+
+  // KPIs
+  if (kpis) {
+    document.getElementById('dash-pay-kpi-val').textContent = `${Number(kpis.total_value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บ.`;
+    document.getElementById('dash-pay-kpi-items').textContent = Number(kpis.total_items || 0).toLocaleString();
+    document.getElementById('dash-pay-kpi-docs').textContent = Number(kpis.total_docs || 0).toLocaleString();
+    document.getElementById('dash-pay-kpi-depts').textContent = Number(kpis.total_departments || 0).toLocaleString();
+  }
+
+  // Monthly Trend Chart
+  renderDashboardTrendChart('dash-pay-chart-container', monthly_trend, 'teal');
+
+  // Departments Breakdown
+  const deptTbody = document.getElementById('dash-pay-departments-tbody');
+  if (deptTbody) {
+    if (departments.length === 0) {
+      deptTbody.innerHTML = '<tr><td colspan="3" class="p-4 text-center text-slate-400">ไม่มีข้อมูล</td></tr>';
+    } else {
+      deptTbody.innerHTML = departments.map(d => `
+        <tr class="hover:bg-slate-50 border-b border-slate-100">
+          <td class="p-2 font-medium text-slate-800">${d.department}</td>
+          <td class="p-2 text-right font-mono text-slate-600">${Number(d.doc_count).toLocaleString()}</td>
+          <td class="p-2 text-right font-mono font-bold text-teal-800">${Number(d.total_val).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+        </tr>
+      `).join('');
+    }
+  }
+
+  // Categories Breakdown
+  const catTbody = document.getElementById('dash-pay-categories-tbody');
+  if (catTbody) {
+    if (categories.length === 0) {
+      catTbody.innerHTML = '<tr><td colspan="3" class="p-4 text-center text-slate-400">ไม่มีข้อมูล</td></tr>';
+    } else {
+      catTbody.innerHTML = categories.map(c => `
+        <tr class="hover:bg-slate-50 border-b border-slate-100">
+          <td class="p-2 font-medium text-slate-800">${c.category}</td>
+          <td class="p-2 text-right font-mono text-slate-600">${Number(c.total_qty || 0).toLocaleString()}</td>
+          <td class="p-2 text-right font-mono font-bold text-slate-900">${Number(c.total_val).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+        </tr>
+      `).join('');
+    }
+  }
+
+  // Top 10 Items
+  const itemsTbody = document.getElementById('dash-pay-topitems-tbody');
+  if (itemsTbody) {
+    if (top_items.length === 0) {
+      itemsTbody.innerHTML = '<tr><td colspan="6" class="p-4 text-center text-slate-400">ไม่มีข้อมูล</td></tr>';
+    } else {
+      itemsTbody.innerHTML = top_items.map(i => `
+        <tr class="hover:bg-slate-50 border-b border-slate-100">
+          <td class="p-2.5 font-mono font-bold text-slate-900">${i.item_code}</td>
+          <td class="p-2.5 font-medium text-slate-800">${i.item_name}</td>
+          <td class="p-2.5 text-slate-600">${i.category}</td>
+          <td class="p-2.5 text-right font-mono font-semibold text-rose-700">-${Number(i.total_qty).toLocaleString()}</td>
+          <td class="p-2.5 text-center text-slate-600">${i.unit}</td>
+          <td class="p-2.5 text-right font-mono font-bold text-slate-900">${Number(i.total_val).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
+        </tr>
+      `).join('');
+    }
+  }
+}
+
+/**
+ * Render dynamic monthly bar chart using pure HTML & CSS
+ */
+function renderDashboardTrendChart(containerId, monthlyData = [], colorTheme = 'emerald') {
+  const container = document.getElementById(containerId);
+  if (!container) return;
+
+  if (monthlyData.length === 0) {
+    container.innerHTML = '<div class="w-full text-center py-10 text-slate-400 text-xs">ไม่มีข้อมูลแนวโน้มรายเดือนในช่วงเวลานี้</div>';
+    return;
+  }
+
+  const maxVal = Math.max(...monthlyData.map(m => Number(m.total_val) || 0), 1);
+  const colorBar = colorTheme === 'teal' ? 'bg-teal-500 hover:bg-teal-600' : 'bg-emerald-500 hover:bg-emerald-600';
+
+  container.innerHTML = monthlyData.map(item => {
+    const val = Number(item.total_val) || 0;
+    const heightPercent = Math.max(Math.round((val / maxVal) * 100), 4);
+    const shortLabel = item.ym ? item.ym.slice(2) : '-'; // '26-01'
+
+    return `
+      <div class="flex-1 flex flex-col items-center justify-end h-44 group relative min-w-[36px]">
+        <!-- Value Tooltip -->
+        <div class="opacity-0 group-hover:opacity-100 transition absolute -top-8 bg-slate-900 text-white text-[10px] py-1 px-2 rounded shadow whitespace-nowrap z-20 pointer-events-none">
+          ${item.ym}: ${val.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บ. (${item.doc_count || 0} บิล)
+        </div>
+        <!-- Bar Value -->
+        <span class="text-[9px] font-mono text-slate-500 mb-1 group-hover:font-bold truncate max-w-full">
+          ${val > 0 ? (val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val.toFixed(0)) : '0'}
+        </span>
+        <!-- Vertical Bar -->
+        <div class="w-full max-w-[42px] ${colorBar} rounded-t-md transition-all duration-300" style="height: ${heightPercent}%;"></div>
+        <!-- Month Label -->
+        <span class="text-[10px] text-slate-600 mt-2 font-mono">${shortLabel}</span>
+      </div>
+    `;
+  }).join('');
 }
 
 // ============================================================================
@@ -1362,12 +2577,43 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // 5. Stock Balance Search & Filters
   document.getElementById('stock-search').addEventListener('input', debounce(loadStockBalance, 300));
-  document.getElementById('stock-category-filter').addEventListener('change', loadStockBalance);
-  document.getElementById('stock-status-filter').addEventListener('change', loadStockBalance);
+  document.getElementById('stock-category-filter').addEventListener('change', () => {
+    state.stockPagination.page = 1;
+    loadStockBalance();
+  });
+  document.getElementById('stock-status-filter').addEventListener('change', () => {
+    state.stockPagination.page = 1;
+    loadStockBalance();
+  });
   document.getElementById('btn-refresh-stock').addEventListener('click', () => {
     loadStockBalance();
     showToast('รีเฟรชข้อมูลสต๊อกเรียบร้อย', 'info');
   });
+
+  // Stock Pagination Controls
+  const stockPageSize = document.getElementById('stock-page-size');
+  if (stockPageSize) {
+    stockPageSize.addEventListener('change', () => {
+      state.stockPagination.page = 1;
+      renderStockBalanceTable();
+    });
+  }
+  const stockPrevBtn = document.getElementById('stock-prev-page');
+  if (stockPrevBtn) {
+    stockPrevBtn.addEventListener('click', () => {
+      if (state.stockPagination.page > 1) {
+        state.stockPagination.page--;
+        renderStockBalanceTable();
+      }
+    });
+  }
+  const stockNextBtn = document.getElementById('stock-next-page');
+  if (stockNextBtn) {
+    stockNextBtn.addEventListener('click', () => {
+      state.stockPagination.page++;
+      renderStockBalanceTable();
+    });
+  }
 
   // Export CSV
   document.getElementById('btn-export-stock-csv').addEventListener('click', () => {
@@ -1383,101 +2629,394 @@ document.addEventListener('DOMContentLoaded', async () => {
     link.click();
   });
 
-  // 6. Buy Module Form Events
-  document.getElementById('buy-item-code').addEventListener('change', (e) => {
-    const opt = e.target.selectedOptions[0];
-    const infoBox = document.getElementById('buy-item-info');
-    if (opt && opt.value) {
-      infoBox.classList.remove('hidden');
-      document.getElementById('buy-preview-name').textContent = opt.getAttribute('data-name');
-      document.getElementById('buy-preview-cat').textContent = opt.getAttribute('data-cat');
-      document.getElementById('buy-preview-unit').textContent = opt.getAttribute('data-unit');
-    } else {
-      infoBox.classList.add('hidden');
+  // 6. Buy Module Form Events & Two-Way Price Calculation
+  const buyQty = document.getElementById('buy-qty');
+  const buyPrice = document.getElementById('buy-price');
+  const buyTotalPrice = document.getElementById('buy-total-price');
+
+  if (buyQty && buyPrice && buyTotalPrice) {
+    function recalcBuyTotalFromUnit() {
+      const q = parseFloat(buyQty.value) || 0;
+      const p = parseFloat(buyPrice.value) || 0;
+      if (q > 0 && p >= 0) {
+        buyTotalPrice.value = (Math.round(q * p * 100) / 100).toFixed(2);
+      }
     }
-  });
+    function recalcBuyUnitFromTotal() {
+      const q = parseFloat(buyQty.value) || 0;
+      const t = parseFloat(buyTotalPrice.value) || 0;
+      if (q > 0 && t >= 0) {
+        buyPrice.value = (Math.round((t / q) * 10000) / 10000).toFixed(4);
+      }
+    }
 
-  function calculateBuyTotal() {
-    const qty = parseFloat(document.getElementById('buy-qty').value) || 0;
-    const price = parseFloat(document.getElementById('buy-price').value) || 0;
-    const total = qty * price;
-    document.getElementById('buy-total-display').textContent = `${total.toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท`;
+    buyQty.addEventListener('input', recalcBuyTotalFromUnit);
+    buyPrice.addEventListener('input', recalcBuyTotalFromUnit);
+    buyTotalPrice.addEventListener('input', recalcBuyUnitFromTotal);
   }
-  document.getElementById('buy-qty').addEventListener('input', calculateBuyTotal);
-  document.getElementById('buy-price').addEventListener('input', calculateBuyTotal);
 
+  // Buy Cart Buttons
+  const btnBuyAddToCart = document.getElementById('btn-buy-add-item-to-cart');
+  if (btnBuyAddToCart) btnBuyAddToCart.addEventListener('click', addBuyItemToCart);
+
+  const btnBuyClearItem = document.getElementById('btn-buy-clear-item');
+  if (btnBuyClearItem) btnBuyClearItem.addEventListener('click', clearBuyItemInputs);
+
+  // Buy History Search & Pagination
+  const buysSearch = document.getElementById('buys-history-search');
+  if (buysSearch) {
+    buysSearch.addEventListener('input', debounce(() => loadRecentBuys(1), 300));
+  }
+  const btnReloadBuys = document.getElementById('btn-reload-buys');
+  if (btnReloadBuys) btnReloadBuys.addEventListener('click', () => loadRecentBuys(state.buysPagination.page));
+
+  const buysPageSize = document.getElementById('buys-page-size');
+  if (buysPageSize) {
+    buysPageSize.addEventListener('change', () => loadRecentBuys(1));
+  }
+  const buysPrevBtn = document.getElementById('buys-prev-page');
+  if (buysPrevBtn) {
+    buysPrevBtn.addEventListener('click', () => {
+      if (state.buysPagination.page > 1) loadRecentBuys(state.buysPagination.page - 1);
+    });
+  }
+  const buysNextBtn = document.getElementById('buys-next-page');
+  if (buysNextBtn) {
+    buysNextBtn.addEventListener('click', () => {
+      if (state.buysPagination.page < state.buysPagination.totalPages) {
+        loadRecentBuys(state.buysPagination.page + 1);
+      }
+    });
+  }
+
+  // Buy Form Submission (Batch Multi-Item Cart or Single Item)
   document.getElementById('form-buy').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const data = {
-      doc_date: document.getElementById('buy-doc-date').value,
-      doc_no: document.getElementById('buy-doc-no').value,
-      item_code: document.getElementById('buy-item-code').value,
-      quantity: document.getElementById('buy-qty').value,
-      price_per_unit: document.getElementById('buy-price').value,
-      shop_name: document.getElementById('buy-shop-name').value,
-      remark: document.getElementById('buy-remark').value
-    };
 
-    const res = await apiRequest('/api/buys', 'POST', data);
+    const doc_date = document.getElementById('buy-doc-date').value;
+    const doc_no = document.getElementById('buy-doc-no').value.trim();
+    const shop_name = document.getElementById('buy-shop-name').value;
+    const remark = document.getElementById('buy-remark').value.trim();
+
+    if (!doc_no) {
+      showToast('กรุณาระบุเลขที่เอกสาร / บิลรับเข้า', 'warning');
+      return;
+    }
+    if (!shop_name) {
+      showToast('กรุณาเลือกร้านค้า / แหล่งรับเข้า', 'warning');
+      return;
+    }
+
+    let payload = null;
+
+    if (state.buyCart.length > 0) {
+      payload = {
+        doc_date,
+        doc_no,
+        shop_name,
+        remark,
+        items: state.buyCart
+      };
+    } else {
+      // Single Item check
+      const item_code = document.getElementById('buy-item-code').value;
+      const qty = parseFloat(document.getElementById('buy-qty').value) || 0;
+      let price = parseFloat(document.getElementById('buy-price').value) || 0;
+      let total = parseFloat(document.getElementById('buy-total-price').value) || 0;
+
+      if (!item_code || qty <= 0) {
+        showToast('กรุณาเลือกรายการพัสดุและระบุจำนวน หรือกดเพิ่มรายการลงในบิลก่อน', 'warning');
+        return;
+      }
+
+      if (total > 0 && price === 0) {
+        price = Math.round((total / qty) * 10000) / 10000;
+      } else if (price > 0 && total === 0) {
+        total = Math.round(qty * price * 100) / 100;
+      }
+
+      payload = {
+        doc_date,
+        doc_no,
+        shop_name,
+        remark,
+        item_code,
+        quantity: qty,
+        price_per_unit: price,
+        total_price: total
+      };
+    }
+
+    const res = await apiRequest('/api/buys', 'POST', payload);
     if (res.ok && res.data.success) {
       showToast(res.data.message || 'บันทึกรับเข้าพัสดุเรียบร้อยแล้ว', 'success');
       document.getElementById('form-buy').reset();
       document.getElementById('buy-doc-date').value = new Date().toISOString().slice(0, 10);
-      document.getElementById('buy-total-display').textContent = '0.00 บาท';
-      document.getElementById('buy-item-info').classList.add('hidden');
-      loadRecentBuys();
+      state.buyCart = [];
+      renderBuyCart();
+      clearBuyItemInputs();
+      loadRecentBuys(1);
+      loadStockBalance();
     } else {
       showToast(res.data.message || 'บันทึกรับเข้าล้มเหลว', 'error');
     }
   });
 
-  // 7. Pay Module Form Events & Real-time Validation
-  document.getElementById('pay-item-code').addEventListener('change', (e) => {
-    const opt = e.target.selectedOptions[0];
-    const alertBox = document.getElementById('pay-stock-alert-box');
-    if (opt && opt.value) {
-      alertBox.classList.remove('hidden');
-      const balance = Number(opt.getAttribute('data-balance') || 0);
-      const unit = opt.getAttribute('data-unit') || '';
-      const price = Number(opt.getAttribute('data-price') || 0);
+  // 7. Pay Module Form Events, Two-Way Math & Pull Buy Modal
+  const payQty = document.getElementById('pay-qty');
+  const payPrice = document.getElementById('pay-price');
+  const payTotalPrice = document.getElementById('pay-total-price');
 
-      document.getElementById('pay-current-stock-badge').textContent = `${balance.toLocaleString()} ${unit}`;
-      document.getElementById('pay-current-avg-price').textContent = price.toFixed(2);
+  if (payQty && payPrice && payTotalPrice) {
+    function recalcPayTotalFromUnit() {
+      const q = parseFloat(payQty.value) || 0;
+      const p = parseFloat(payPrice.value) || 0;
+      if (q > 0 && p >= 0) {
+        payTotalPrice.value = (Math.round(q * p * 100) / 100).toFixed(2);
+      }
       validatePayQuantity();
-    } else {
-      alertBox.classList.add('hidden');
     }
-  });
+    function recalcPayUnitFromTotal() {
+      const q = parseFloat(payQty.value) || 0;
+      const t = parseFloat(payTotalPrice.value) || 0;
+      if (q > 0 && t >= 0) {
+        payPrice.value = (Math.round((t / q) * 10000) / 10000).toFixed(4);
+      }
+      validatePayQuantity();
+    }
 
-  document.getElementById('pay-qty').addEventListener('input', validatePayQuantity);
+    payQty.addEventListener('input', recalcPayTotalFromUnit);
+    payPrice.addEventListener('input', recalcPayTotalFromUnit);
+    payTotalPrice.addEventListener('input', recalcPayUnitFromTotal);
+  }
 
+  // Pay Cart Buttons
+  const btnPayAddToCart = document.getElementById('btn-pay-add-item-to-cart');
+  if (btnPayAddToCart) btnPayAddToCart.addEventListener('click', addPayItemToCart);
+
+  const btnPayClearItem = document.getElementById('btn-pay-clear-item');
+  if (btnPayClearItem) btnPayClearItem.addEventListener('click', clearPayItemInputs);
+
+  // Pull Buy Bill Buttons
+  const btnOpenPullBuy = document.getElementById('btn-open-pull-buy');
+  if (btnOpenPullBuy) btnOpenPullBuy.addEventListener('click', openPullBuyModal);
+
+  const btnConfirmPullBuy = document.getElementById('btn-confirm-pull-buy');
+  if (btnConfirmPullBuy) btnConfirmPullBuy.addEventListener('click', confirmPullBuyBill);
+
+  // Pay History Search & Pagination
+  const paysSearch = document.getElementById('pays-history-search');
+  if (paysSearch) {
+    paysSearch.addEventListener('input', debounce(() => loadRecentPays(1), 300));
+  }
+  const btnReloadPays = document.getElementById('btn-reload-pays');
+  if (btnReloadPays) btnReloadPays.addEventListener('click', () => loadRecentPays(state.paysPagination.page));
+
+  const paysPageSize = document.getElementById('pays-page-size');
+  if (paysPageSize) {
+    paysPageSize.addEventListener('change', () => loadRecentPays(1));
+  }
+  const paysPrevBtn = document.getElementById('pays-prev-page');
+  if (paysPrevBtn) {
+    paysPrevBtn.addEventListener('click', () => {
+      if (state.paysPagination.page > 1) loadRecentPays(state.paysPagination.page - 1);
+    });
+  }
+  const paysNextBtn = document.getElementById('pays-next-page');
+  if (paysNextBtn) {
+    paysNextBtn.addEventListener('click', () => {
+      if (state.paysPagination.page < state.paysPagination.totalPages) {
+        loadRecentPays(state.paysPagination.page + 1);
+      }
+    });
+  }
+
+  // Pay Form Submission (Batch Multi-Item Cart or Single Item with Negative Check)
   document.getElementById('form-pay').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const itemCode = document.getElementById('pay-item-code').value;
-    const qty = parseFloat(document.getElementById('pay-qty').value) || 0;
 
-    const data = {
-      doc_date: document.getElementById('pay-doc-date').value,
-      doc_no: document.getElementById('pay-doc-no').value,
-      item_code: itemCode,
-      quantity: qty,
-      department: document.getElementById('pay-department').value,
-      remark: document.getElementById('pay-remark').value
-    };
+    const doc_date = document.getElementById('pay-doc-date').value;
+    const doc_no = document.getElementById('pay-doc-no').value.trim();
+    const department = document.getElementById('pay-department').value.trim();
+    const remark = document.getElementById('pay-remark').value.trim();
 
-    const res = await apiRequest('/api/pays', 'POST', data);
+    if (!doc_no) {
+      showToast('กรุณาระบุเลขที่ใบเบิก', 'warning');
+      return;
+    }
+    if (!department) {
+      showToast('กรุณาระบุแผนก / หน่วยงานที่เบิก', 'warning');
+      return;
+    }
+
+    let payload = null;
+
+    if (state.payCart.length > 0) {
+      payload = {
+        doc_date,
+        doc_no,
+        department,
+        remark,
+        items: state.payCart
+      };
+    } else {
+      // Single Item check
+      const item_code = document.getElementById('pay-item-code').value;
+      const qty = parseFloat(document.getElementById('pay-qty').value) || 0;
+      let price = parseFloat(document.getElementById('pay-price').value) || 0;
+      let total = parseFloat(document.getElementById('pay-total-price').value) || 0;
+
+      if (!item_code || qty <= 0) {
+        showToast('กรุณาเลือกรายการพัสดุและระบุจำนวนที่ขอเบิก หรือกดเพิ่มรายการลงในใบเบิกก่อน', 'warning');
+        return;
+      }
+
+      const stock = (state.stockItems || []).find(s => s.item_code === item_code);
+      const balance = stock ? Number(stock.balance_qty) : 0;
+      if (qty > balance) {
+        showToast(`จำนวนที่ขอเบิก (${qty}) เกินคงเหลือจริงในคลัง (${balance}) ไม่อนุญาตให้ติดลบ`, 'error');
+        return;
+      }
+
+      if (total > 0 && price === 0) {
+        price = Math.round((total / qty) * 10000) / 10000;
+      } else if (price > 0 && total === 0) {
+        total = Math.round(qty * price * 100) / 100;
+      } else if (price === 0 && total === 0 && stock) {
+        price = stock.avg_unit_price || 0;
+        total = Math.round(qty * price * 100) / 100;
+      }
+
+      payload = {
+        doc_date,
+        doc_no,
+        department,
+        remark,
+        item_code,
+        quantity: qty,
+        price_per_unit: price,
+        total_price: total
+      };
+    }
+
+    const res = await apiRequest('/api/pays', 'POST', payload);
     if (res.ok && res.data.success) {
       showToast(res.data.message || 'บันทึกเบิกจ่ายพัสดุสำเร็จ', 'success');
       document.getElementById('form-pay').reset();
       document.getElementById('pay-doc-date').value = new Date().toISOString().slice(0, 10);
-      document.getElementById('pay-stock-alert-box').classList.add('hidden');
-      loadRecentPays();
-      // อัปเดตแคชยอดคงเหลือ
-      await loadStockBalance();
+      state.payCart = [];
+      renderPayCart();
+      clearPayItemInputs();
+      loadRecentPays(1);
+      loadStockBalance();
     } else {
       showToast(res.data.message || 'บันทึกเบิกจ่ายล้มเหลว', 'error');
     }
   });
+
+  // User Management: Edit User Form Submission
+  const formUserEdit = document.getElementById('form-user-edit');
+  if (formUserEdit) {
+    formUserEdit.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const userId = document.getElementById('edit-user-id').value;
+      const data = {
+        fullname: document.getElementById('edit-user-fullname').value.trim(),
+        role: document.getElementById('edit-user-role').value,
+        department: document.getElementById('edit-user-dept').value.trim()
+      };
+      const pw = document.getElementById('edit-user-password').value;
+      if (pw) data.password = pw;
+
+      const res = await apiRequest(`/api/admin/users/${userId}`, 'PUT', data);
+      if (res.ok) {
+        showToast(res.data.message || 'แก้ไขข้อมูลผู้ใช้สำเร็จ', 'success');
+        closeModal('user-edit-modal');
+        loadUsersManagement();
+      } else {
+        showToast(res.data.message || 'เกิดข้อผิดพลาดในการแก้ไข', 'error');
+      }
+    });
+  }
+
+  // User Management: Delete User Confirmation Action
+  const btnConfirmDeleteUser = document.getElementById('btn-confirm-delete-user');
+  if (btnConfirmDeleteUser) {
+    btnConfirmDeleteUser.addEventListener('click', async () => {
+      const userId = document.getElementById('delete-user-id').value;
+      const res = await apiRequest(`/api/admin/users/${userId}`, 'DELETE');
+      if (res.ok) {
+        showToast(res.data.message || 'ลบผู้ใช้งานสำเร็จ', 'success');
+        closeModal('user-delete-modal');
+        loadUsersManagement();
+      } else {
+        showToast(res.data.message || 'ไม่สามารถลบผู้ใช้งานได้', 'error');
+      }
+    });
+  }
+
+  // Dashboards Event Listeners
+  const btnDashBuyApply = document.getElementById('btn-dash-buy-apply');
+  if (btnDashBuyApply) btnDashBuyApply.addEventListener('click', loadDashboardBuy);
+
+  const btnExportDashBuyCsv = document.getElementById('btn-export-dash-buy-csv');
+  if (btnExportDashBuyCsv) {
+    btnExportDashBuyCsv.addEventListener('click', () => {
+      const kpiVal = document.getElementById('dash-buy-kpi-val')?.textContent || '';
+      const kpiItems = document.getElementById('dash-buy-kpi-items')?.textContent || '';
+      const kpiDocs = document.getElementById('dash-buy-kpi-docs')?.textContent || '';
+      const period = document.getElementById('dash-buy-period-display')?.textContent || '';
+
+      let csv = '\uFEFFรายงานสรุปยอดรับเข้าพัสดุ (Inbound Dashboard)\n';
+      csv += `ช่วงเวลา,"${period}"\n`;
+      csv += `มูลค่ารับเข้ารวม,"${kpiVal}"\n`;
+      csv += `จำนวนรายการ,"${kpiItems}"\n`;
+      csv += `จำนวนบิล,"${kpiDocs}"\n\n`;
+
+      csv += 'รหัสพัสดุ,ชื่อพัสดุ,กลุ่มพัสดุ,จำนวนรับ,หน่วยนับ,มูลค่ารวม (บาท)\n';
+      document.querySelectorAll('#dash-buy-topitems-tbody tr').forEach(row => {
+        const cells = Array.from(row.querySelectorAll('td')).map(td => `"${td.textContent.trim()}"`);
+        if (cells.length >= 6) csv += cells.join(',') + '\n';
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `Dashboard_รับเข้า_รพ_ไทรโยค_${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+    });
+  }
+
+  const btnDashPayApply = document.getElementById('btn-dash-pay-apply');
+  if (btnDashPayApply) btnDashPayApply.addEventListener('click', loadDashboardPay);
+
+  const btnExportDashPayCsv = document.getElementById('btn-export-dash-pay-csv');
+  if (btnExportDashPayCsv) {
+    btnExportDashPayCsv.addEventListener('click', () => {
+      const kpiVal = document.getElementById('dash-pay-kpi-val')?.textContent || '';
+      const kpiItems = document.getElementById('dash-pay-kpi-items')?.textContent || '';
+      const kpiDocs = document.getElementById('dash-pay-kpi-docs')?.textContent || '';
+      const period = document.getElementById('dash-pay-period-display')?.textContent || '';
+
+      let csv = '\uFEFFรายงานสรุปยอดเบิกจ่ายพัสดุ (Outbound Dashboard)\n';
+      csv += `ช่วงเวลา,"${period}"\n`;
+      csv += `มูลค่าเบิกจ่ายรวม,"${kpiVal}"\n`;
+      csv += `จำนวนรายการเบิก,"${kpiItems}"\n`;
+      csv += `จำนวนใบเบิก,"${kpiDocs}"\n\n`;
+
+      csv += 'รหัสพัสดุ,ชื่อพัสดุ,กลุ่มพัสดุ,จำนวนเบิก,หน่วยนับ,มูลค่ารวม (บาท)\n';
+      document.querySelectorAll('#dash-pay-topitems-tbody tr').forEach(row => {
+        const cells = Array.from(row.querySelectorAll('td')).map(td => `"${td.textContent.trim()}"`);
+        if (cells.length >= 6) csv += cells.join(',') + '\n';
+      });
+
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `Dashboard_เบิกจ่าย_รพ_ไทรโยค_${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+    });
+  }
 
   // 8. Stock Card & Print Controls
   document.getElementById('btn-fetch-stock-card').addEventListener('click', fetchStockCardReport);
