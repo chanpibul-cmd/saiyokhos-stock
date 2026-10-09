@@ -294,54 +294,100 @@ export default {
         const category = (url.searchParams.get("category") || "").trim();
         const status = (url.searchParams.get("status") || "").trim();
 
-        let sql = "SELECT * FROM view_stock_balance WHERE is_active = 1";
+        let sql = `
+          SELECT 
+            v.*,
+            b_last.last_buy_date,
+            p_last.last_pay_date
+          FROM view_stock_balance v
+          LEFT JOIN (SELECT item_code, MAX(doc_date) as last_buy_date FROM buys GROUP BY item_code) b_last ON v.item_code = b_last.item_code
+          LEFT JOIN (SELECT item_code, MAX(doc_date) as last_pay_date FROM pays GROUP BY item_code) p_last ON v.item_code = p_last.item_code
+          WHERE v.is_active = 1
+        `;
         const params = [];
 
         if (q) {
-          sql += " AND (item_code LIKE ? OR item_name LIKE ?)";
+          sql += " AND (v.item_code LIKE ? OR v.item_name LIKE ?)";
           params.push(`%${q}%`, `%${q}%`);
         }
 
         if (category) {
-          sql += " AND category = ?";
+          sql += " AND v.category = ?";
           params.push(category);
         }
 
-        if (status) {
-          sql += " AND stock_status = ?";
+        if (status === "NORMAL" || status === "LOW_STOCK" || status === "OUT_OF_STOCK") {
+          sql += " AND v.stock_status = ?";
           params.push(status);
         }
 
-        sql += " ORDER BY category ASC, item_code ASC";
+        sql += " ORDER BY v.category ASC, v.item_code ASC";
 
         const stmt = db.prepare(sql).bind(...params);
         const { results } = await stmt.all();
 
-        // คำนวณสรุปข้อมูล KPI Dashboard
-        const totalItems = results.length;
+        const now = new Date();
         let normalCount = 0;
         let lowStockCount = 0;
         let outOfStockCount = 0;
+        let inactive45Count = 0;
+        let inactive90Count = 0;
+        let inactive180Count = 0;
         let totalValue = 0;
 
-        for (const item of results) {
+        const processedItems = (results || []).map(item => {
+          let lastMove = null;
+          if (item.last_buy_date && item.last_pay_date) {
+            lastMove = item.last_buy_date > item.last_pay_date ? item.last_buy_date : item.last_pay_date;
+          } else if (item.last_buy_date) {
+            lastMove = item.last_buy_date;
+          } else if (item.last_pay_date) {
+            lastMove = item.last_pay_date;
+          }
+
+          item.last_movement_date = lastMove;
+          if (lastMove) {
+            const diffDays = Math.floor((now.getTime() - new Date(lastMove).getTime()) / (1000 * 60 * 60 * 24));
+            item.days_inactive = Math.max(0, diffDays);
+          } else {
+            item.days_inactive = 999;
+          }
+
           if (item.stock_status === "NORMAL") normalCount++;
           else if (item.stock_status === "LOW_STOCK") lowStockCount++;
           else if (item.stock_status === "OUT_OF_STOCK") outOfStockCount++;
+
+          if (item.days_inactive >= 45) inactive45Count++;
+          if (item.days_inactive >= 90) inactive90Count++;
+          if (item.days_inactive >= 180) inactive180Count++;
+
           totalValue += Number(item.balance_val) || 0;
+          return item;
+        });
+
+        let filteredItems = processedItems;
+        if (status === "INACTIVE_45") {
+          filteredItems = processedItems.filter(i => i.days_inactive >= 45);
+        } else if (status === "INACTIVE_90") {
+          filteredItems = processedItems.filter(i => i.days_inactive >= 90);
+        } else if (status === "INACTIVE_180") {
+          filteredItems = processedItems.filter(i => i.days_inactive >= 180);
         }
 
         return json({
           success: true,
-          count: totalItems,
+          count: filteredItems.length,
           summary: {
-            total_items: totalItems,
+            total_items: processedItems.length,
             normal_count: normalCount,
             low_stock_count: lowStockCount,
             out_of_stock_count: outOfStockCount,
+            inactive_45_count: inactive45Count,
+            inactive_90_count: inactive90Count,
+            inactive_180_count: inactive180Count,
             total_inventory_value: Math.round(totalValue * 100) / 100,
           },
-          items: results || [],
+          items: filteredItems,
         });
       }
 
@@ -1556,13 +1602,13 @@ export default {
           return errorJson("กรุณากรอกชื่อ-นามสกุล, แผนก/สังกัด และบทบาท ให้ครบถ้วน", 400);
         }
 
-        // ป้องกันการเปลี่ยนบทบาทของ chanpibul (id = 1)
-        if (targetUserId === 1 && role !== "superadmin") {
-          return errorJson("ไม่อนุญาตให้เปลี่ยนบทบาทของ Superadmin หลัก (chanpibul)", 400);
-        }
-
-        const user = await db.prepare("SELECT id FROM users WHERE id = ?").bind(targetUserId).first();
+        const user = await db.prepare("SELECT id, role FROM users WHERE id = ?").bind(targetUserId).first();
         if (!user) return errorJson("ไม่พบผู้ใช้งานนี้", 404);
+
+        // ไม่อนุญาตให้แก้ไขบัญชี Superadmin (id=1 หรือ role=superadmin)
+        if (targetUserId === 1 || user.role === "superadmin") {
+          return errorJson("ไม่อนุญาตให้แก้ไขข้อมูลบัญชีผู้ดูแลระบบสูงสุด (Superadmin)", 403);
+        }
 
         if (newPassword && newPassword.length >= 4) {
           const newHash = await sha256Hex(newPassword);
@@ -1592,15 +1638,16 @@ export default {
         const targetUserId = parseInt(parts[4]);
         if (!targetUserId) return errorJson("รหัสผู้ใช้ไม่ถูกต้อง", 400);
 
-        if (targetUserId === 1) {
-          return errorJson("ไม่อนุญาตให้ลบบัญชี Superadmin หลัก (chanpibul) เด็ดขาด", 400);
+        const user = await db.prepare("SELECT id, username, role FROM users WHERE id = ?").bind(targetUserId).first();
+        if (!user) return errorJson("ไม่พบผู้ใช้งานนี้", 404);
+
+        // ไม่อนุญาตให้ลบบัญชี Superadmin
+        if (targetUserId === 1 || user.role === "superadmin") {
+          return errorJson("ไม่อนุญาตให้ลบบัญชีผู้ดูแลระบบสูงสุด (Superadmin) เด็ดขาด", 403);
         }
         if (targetUserId === authUser.userId) {
           return errorJson("ไม่อนุญาตให้ลบบัญชีของตนเองที่กำลังเข้าสู่ระบบอยู่", 400);
         }
-
-        const user = await db.prepare("SELECT username FROM users WHERE id = ?").bind(targetUserId).first();
-        if (!user) return errorJson("ไม่พบผู้ใช้งานนี้", 404);
 
         // ลบ permissions และ user
         await db.prepare("DELETE FROM permissions WHERE user_id = ?").bind(targetUserId).run();

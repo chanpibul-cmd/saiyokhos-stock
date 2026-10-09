@@ -74,18 +74,6 @@
 
         <!-- Right Side Nav Actions -->
         <div class="flex items-center space-x-3 sm:space-x-4">
-          <!-- Visual Deployment Guide Button -->
-          <a href="deployment_guide.html" target="_blank" title="ดูสื่อจำลองขั้นตอนการ Deploy" class="text-xs bg-brand-900/60 hover:bg-brand-900 text-brand-200 hover:text-white px-2.5 py-1.5 rounded-md flex items-center space-x-1.5 transition border border-brand-700">
-            <i class="fa-solid fa-circle-play text-emerald-400"></i>
-            <span class="hidden lg:inline">วิดีโอจำลอง Deploy</span>
-          </a>
-
-          <!-- Backend API Status Indicator -->
-          <button id="btn-open-api-settings" title="ตั้งค่าการเชื่อมต่อ API" class="text-xs bg-brand-900/60 hover:bg-brand-900 text-brand-200 hover:text-white px-2.5 py-1.5 rounded-md flex items-center space-x-1.5 transition border border-brand-700">
-            <span id="api-status-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            <span class="hidden md:inline" id="api-status-text">Cloudflare API</span>
-            <i class="fa-solid fa-gear text-xs"></i>
-          </button>
 
           <!-- Guest State: Login Button -->
           <div id="nav-guest-section">
@@ -298,12 +286,29 @@
           </div>
           <div class="w-full md:w-48">
             <select id="stock-status-filter" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
-              <option value="">-- ทุกสถานะ --</option>
+              <option value="">-- ทุกสถานะสต๊อก --</option>
               <option value="NORMAL">ปกติ</option>
               <option value="LOW_STOCK">ใกล้หมด (Low Stock)</option>
               <option value="OUT_OF_STOCK">หมดสต๊อก (Out of Stock)</option>
+              <option value="INACTIVE_45">⏳ ไม่เคลื่อนไหว > 45 วัน</option>
+              <option value="INACTIVE_90">⚠️ ไม่เคลื่อนไหว > 90 วัน</option>
+              <option value="INACTIVE_180">🛑 ไม่เคลื่อนไหว > 180 วัน</option>
             </select>
           </div>
+        </div>
+
+        <!-- Quick Status Pills -->
+        <div class="flex flex-wrap items-center gap-1.5 text-xs bg-white p-2.5 rounded-lg border border-slate-200">
+          <span class="text-slate-500 text-[11px] font-medium mr-1 flex items-center">
+            <i class="fa-solid fa-filter mr-1 text-slate-400"></i> กรองด่วน:
+          </span>
+          <button type="button" onclick="setStockStatusFilter('')" class="stock-pill-btn active px-2.5 py-1 rounded-full border border-brand-700 bg-brand-700 text-white font-medium hover:opacity-90 transition text-xs" data-status="">ทั้งหมด</button>
+          <button type="button" onclick="setStockStatusFilter('NORMAL')" class="stock-pill-btn px-2.5 py-1 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition text-xs" data-status="NORMAL">ปกติ</button>
+          <button type="button" onclick="setStockStatusFilter('LOW_STOCK')" class="stock-pill-btn px-2.5 py-1 rounded-full border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition text-xs" data-status="LOW_STOCK">ใกล้หมด</button>
+          <button type="button" onclick="setStockStatusFilter('OUT_OF_STOCK')" class="stock-pill-btn px-2.5 py-1 rounded-full border border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100 transition text-xs" data-status="OUT_OF_STOCK">หมดสต๊อก</button>
+          <button type="button" onclick="setStockStatusFilter('INACTIVE_45')" class="stock-pill-btn px-2.5 py-1 rounded-full border border-yellow-300 bg-yellow-50 text-yellow-800 hover:bg-yellow-100 transition text-xs font-medium" data-status="INACTIVE_45">⏳ ไม่เคลื่อนไหว > 45 วัน</button>
+          <button type="button" onclick="setStockStatusFilter('INACTIVE_90')" class="stock-pill-btn px-2.5 py-1 rounded-full border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 transition text-xs font-medium" data-status="INACTIVE_90">⚠️ ไม่เคลื่อนไหว > 90 วัน</button>
+          <button type="button" onclick="setStockStatusFilter('INACTIVE_180')" class="stock-pill-btn px-2.5 py-1 rounded-full border border-rose-300 bg-rose-50 text-rose-800 hover:bg-rose-100 transition text-xs font-medium" data-status="INACTIVE_180">🛑 ไม่เคลื่อนไหว > 180 วัน</button>
         </div>
 
         <!-- Stock Table Card -->
@@ -367,12 +372,20 @@
            VIEW 2: บันทึกรับเข้าพัสดุ (Buy)
            ==================================================================== -->
       <section id="page-buy" class="page-view hidden animate-fade-in space-y-6">
-        <div>
-          <h1 class="text-2xl font-bold font-display text-slate-900 flex items-center space-x-2">
-            <i class="fa-solid fa-cart-arrow-down text-emerald-600"></i>
-            <span>บันทึกรับเข้าพัสดุ (Inbound / Buy)</span>
-          </h1>
-          <p class="text-sm text-slate-500 mt-0.5">รองรับบิลเดียวหลายรายการ, ค้นหาพัสดุอัตโนมัติ และใส่ราคารวมได้โดยตรง (สำหรับน้ำมัน/สินค้ามีส่วนลด)</p>
+        <div class="sm:flex sm:items-center sm:justify-between">
+          <div>
+            <h1 class="text-2xl font-bold font-display text-slate-900 flex items-center space-x-2">
+              <i class="fa-solid fa-cart-arrow-down text-emerald-600"></i>
+              <span>บันทึกรับเข้าพัสดุ (Inbound / Buy)</span>
+            </h1>
+            <p class="text-sm text-slate-500 mt-0.5">ระบบรับเข้าพัสดุเข้าคลัง รองรับ 1 บิลหลายรายการ ค้นหาพัสดุอัจฉริยะ และคำนวณราคารวมได้โดยตรง</p>
+          </div>
+          <div class="mt-3 sm:mt-0">
+            <button type="button" onclick="navigateToPage('stock_balance')" class="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-medium px-3.5 py-2 rounded-lg text-xs shadow-sm transition flex items-center space-x-1.5">
+              <i class="fa-solid fa-boxes-stacked text-emerald-600"></i>
+              <span>ตรวจเช็คยอดสต๊อกคงเหลือ</span>
+            </button>
+          </div>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -423,11 +436,16 @@
                   <input type="hidden" id="buy-item-code">
                 </div>
 
-                <div id="buy-item-info" class="p-2.5 bg-white rounded-lg border border-slate-200 text-xs hidden space-y-1">
-                  <div><span class="text-slate-500">พัสดุ:</span> <span id="buy-preview-name" class="font-bold text-slate-800">-</span></div>
-                  <div class="flex justify-between text-slate-600">
-                    <span>กลุ่ม: <span id="buy-preview-cat" class="font-medium">-</span></span>
-                    <span>หน่วยนับ: <span id="buy-preview-unit" class="font-bold text-emerald-700">-</span></span>
+                <!-- Real-time Balance Box for Selected Item -->
+                <div id="buy-stock-alert-box" class="p-2.5 bg-white rounded-lg border border-emerald-200 text-xs hidden space-y-1">
+                  <div class="flex justify-between items-center">
+                    <span class="font-medium text-slate-700" id="buy-preview-name">-</span>
+                    <span id="buy-current-stock-badge" class="font-bold text-xs text-emerald-800 font-mono bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">คงเหลือ 0 หน่วย</span>
+                  </div>
+                  <div class="text-[11px] text-slate-500 flex justify-between">
+                    <span>กลุ่ม: <span id="buy-preview-cat" class="font-medium text-slate-700">-</span></span>
+                    <span>ราคาเฉลี่ยคลัง: <span id="buy-current-avg-price">0.00</span> บ.</span>
+                    <span>เกณฑ์เตือน: <span id="buy-current-min-stock">0</span></span>
                   </div>
                 </div>
 
@@ -1520,12 +1538,12 @@
         <p class="text-xs text-brand-200 mt-1">โรงพยาบาลไทรโยค จ.กาญจนบุรี</p>
       </div>
 
-      <form id="form-login" class="p-6 space-y-4">
+      <form id="form-login" class="p-6 space-y-4" autocomplete="off">
         <div>
           <label class="block text-xs font-semibold text-slate-700 mb-1">ชื่อผู้ใช้งาน (Username)</label>
           <div class="relative">
             <i class="fa-solid fa-user absolute left-3.5 top-3 text-slate-400 text-sm"></i>
-            <input type="text" id="login-username" required placeholder="เช่น chanpibul" 
+            <input type="text" id="login-username" required placeholder="ระบุชื่อผู้ใช้งาน" autocomplete="off"
                    class="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-brand-500">
           </div>
         </div>
@@ -1534,14 +1552,16 @@
           <label class="block text-xs font-semibold text-slate-700 mb-1">รหัสผ่าน (Password)</label>
           <div class="relative">
             <i class="fa-solid fa-lock absolute left-3.5 top-3 text-slate-400 text-sm"></i>
-            <input type="password" id="login-password" required placeholder="ระบุรหัสผ่าน" 
+            <input type="password" id="login-password" required placeholder="ระบุรหัสผ่าน" autocomplete="off"
                    class="w-full pl-10 pr-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-brand-500">
           </div>
         </div>
 
-        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800">
-          <p class="font-semibold mb-1"><i class="fa-solid fa-circle-info mr-1"></i> ข้อมูลบัญชีเริ่มต้นระบบ:</p>
-          <p>&bull; Superadmin: <code class="bg-amber-100 px-1 py-0.5 rounded font-mono">chanpibul</code> / รหัสผ่าน: <code class="bg-amber-100 px-1 py-0.5 rounded font-mono">300628</code></p>
+        <div class="flex items-center justify-between py-0.5">
+          <label class="flex items-center space-x-2 text-slate-700 cursor-pointer select-none">
+            <input type="checkbox" id="login-remember-me" class="rounded border-slate-300 text-brand-600 focus:ring-brand-500 w-4 h-4">
+            <span class="text-xs font-medium">จดจำชื่อผู้ใช้และรหัสผ่าน</span>
+          </label>
         </div>
 
         <button type="submit" id="btn-do-login" class="w-full bg-brand-700 hover:bg-brand-800 text-white font-medium py-2.5 px-4 rounded-lg shadow-sm transition flex items-center justify-center space-x-2">

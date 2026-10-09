@@ -183,6 +183,7 @@ const mockData = {
  * คำนวณ view_stock_balance จำลองสำหรับกรณี Offline / Mock
  */
 function calculateMockStockBalance() {
+  const now = Date.now();
   return mockData.items.map(item => {
     const buysForItem = mockData.buys.filter(b => b.item_code === item.item_code);
     const paysForItem = mockData.pays.filter(p => p.item_code === item.item_code);
@@ -204,6 +205,18 @@ function calculateMockStockBalance() {
       stock_status = 'LOW_STOCK';
     }
 
+    const last_buy_date = buysForItem.length > 0 ? buysForItem.map(b => b.doc_date).sort().reverse()[0] : null;
+    const last_pay_date = paysForItem.length > 0 ? paysForItem.map(p => p.doc_date).sort().reverse()[0] : null;
+    let last_movement_date = null;
+    if (last_buy_date && last_pay_date) {
+      last_movement_date = last_buy_date > last_pay_date ? last_buy_date : last_pay_date;
+    } else if (last_buy_date) {
+      last_movement_date = last_buy_date;
+    } else if (last_pay_date) {
+      last_movement_date = last_pay_date;
+    }
+    const days_inactive = last_movement_date ? Math.max(0, Math.floor((now - new Date(last_movement_date).getTime()) / (1000 * 60 * 60 * 24))) : 999;
+
     return {
       item_id: item.id,
       item_code: item.item_code,
@@ -220,7 +233,11 @@ function calculateMockStockBalance() {
       balance_qty,
       avg_unit_price,
       balance_val,
-      stock_status
+      stock_status,
+      last_buy_date,
+      last_pay_date,
+      last_movement_date,
+      days_inactive
     };
   });
 }
@@ -285,19 +302,26 @@ function handleMockApiFallback(endpoint, method, data) {
     const cat = urlObj.searchParams.get('category') || '';
     const st = urlObj.searchParams.get('status') || '';
 
-    let items = calculateMockStockBalance();
+    const allItems = calculateMockStockBalance();
+    let items = allItems;
     if (q) {
       items = items.filter(i => i.item_code.toLowerCase().includes(q) || i.item_name.toLowerCase().includes(q));
     }
     if (cat) {
       items = items.filter(i => i.category === cat);
     }
-    if (st) {
+    if (st === 'INACTIVE_45') {
+      items = items.filter(i => i.days_inactive >= 45);
+    } else if (st === 'INACTIVE_90') {
+      items = items.filter(i => i.days_inactive >= 90);
+    } else if (st === 'INACTIVE_180') {
+      items = items.filter(i => i.days_inactive >= 180);
+    } else if (st) {
       items = items.filter(i => i.stock_status === st);
     }
 
     let normal = 0, low = 0, out = 0, totalVal = 0;
-    items.forEach(i => {
+    allItems.forEach(i => {
       if (i.stock_status === 'NORMAL') normal++;
       else if (i.stock_status === 'LOW_STOCK') low++;
       else if (i.stock_status === 'OUT_OF_STOCK') out++;
@@ -310,10 +334,13 @@ function handleMockApiFallback(endpoint, method, data) {
       data: {
         success: true,
         summary: {
-          total_items: items.length,
+          total_items: allItems.length,
           normal_count: normal,
           low_stock_count: low,
           out_of_stock_count: out,
+          inactive_45_count: allItems.filter(i => i.days_inactive >= 45).length,
+          inactive_90_count: allItems.filter(i => i.days_inactive >= 90).length,
+          inactive_180_count: allItems.filter(i => i.days_inactive >= 180).length,
           total_inventory_value: Math.round(totalVal * 100) / 100
         },
         items
@@ -331,9 +358,8 @@ function handleMockApiFallback(endpoint, method, data) {
       return { ok: false, status: 401, data: { success: false, message: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' } };
     }
 
-    // Default password checks for mock demo: '300628' or '123456'
     if (username === 'chanpibul' && password !== '300628') {
-      return { ok: false, status: 401, data: { success: false, message: 'รหัสผ่านไม่ถูกต้อง (รหัสเริ่มต้นของ chanpibul คือ 300628)' } };
+      return { ok: false, status: 401, data: { success: false, message: 'รหัสผ่านไม่ถูกต้อง' } };
     }
 
     const mockToken = `mock_jwt_token_${user.id}_${Date.now()}`;
@@ -827,14 +853,17 @@ function updateApiStatusBadge(isLive) {
   const text = document.getElementById('api-status-text');
   const modeSpan = document.getElementById('api-current-mode');
 
-  if (isLive) {
-    dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
-    text.textContent = 'Worker เชื่อมต่อแล้ว';
-    if (modeSpan) modeSpan.textContent = 'Cloudflare D1 Online';
-  } else {
-    dot.className = 'w-2 h-2 rounded-full bg-amber-400';
-    text.textContent = 'โหมดทดสอบ (Demo)';
-    if (modeSpan) modeSpan.textContent = 'Offline / In-Memory Demo';
+  if (dot && text) {
+    if (isLive) {
+      dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+      text.textContent = 'Worker เชื่อมต่อแล้ว';
+    } else {
+      dot.className = 'w-2 h-2 rounded-full bg-amber-400';
+      text.textContent = 'โหมดทดสอบ (Demo)';
+    }
+  }
+  if (modeSpan) {
+    modeSpan.textContent = isLive ? 'Cloudflare D1 Online' : 'Offline / In-Memory Demo';
   }
 }
 
@@ -1071,6 +1100,20 @@ function renderStockBalanceTable() {
       statusIcon = 'fa-circle-xmark';
     }
 
+    let inactiveBadge = '';
+    const daysInactive = typeof item.days_inactive === 'number' ? item.days_inactive : null;
+    if (daysInactive !== null) {
+      if (daysInactive >= 180) {
+        inactiveBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300 mt-1 block max-w-fit mx-auto" title="ไม่เคลื่อนไหว ${daysInactive} วัน (ล่าสุด: ${item.last_movement_date || 'ไม่มีประวัติ'})"><i class="fa-solid fa-clock-rotate-left mr-1"></i>ไม่เคลื่อนไหว 180 วัน</span>`;
+      } else if (daysInactive >= 90) {
+        inactiveBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 mt-1 block max-w-fit mx-auto" title="ไม่เคลื่อนไหว ${daysInactive} วัน (ล่าสุด: ${item.last_movement_date || 'ไม่มีประวัติ'})"><i class="fa-solid fa-clock-rotate-left mr-1"></i>ไม่เคลื่อนไหว 90 วัน</span>`;
+      } else if (daysInactive >= 45) {
+        inactiveBadge = `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-100 text-yellow-800 border border-yellow-300 mt-1 block max-w-fit mx-auto" title="ไม่เคลื่อนไหว ${daysInactive} วัน (ล่าสุด: ${item.last_movement_date || 'ไม่มีประวัติ'})"><i class="fa-solid fa-clock-rotate-left mr-1"></i>ไม่เคลื่อนไหว 45 วัน</span>`;
+      } else if (item.last_movement_date) {
+        inactiveBadge = `<span class="text-[10px] text-slate-400 block mt-0.5" title="ความเคลื่อนไหวล่าสุด">${item.last_movement_date}</span>`;
+      }
+    }
+
     return `
       <tr class="hover:bg-slate-50 transition border-b border-slate-100">
         <td class="py-3 px-4 font-mono font-semibold text-slate-900">${item.item_code}</td>
@@ -1089,6 +1132,7 @@ function renderStockBalanceTable() {
           <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${badgeClass}">
             <i class="fa-solid ${statusIcon} mr-1 text-[10px]"></i> ${statusText}
           </span>
+          ${inactiveBadge}
         </td>
         <td class="py-3 px-4 text-center">
           <button onclick="viewStockCardDirect('${item.item_code}')" class="text-brand-700 hover:text-brand-900 bg-brand-50 hover:bg-brand-100 p-1.5 rounded-md text-xs font-medium transition" title="เปิดบัตรคุมพัสดุ">
@@ -1099,6 +1143,23 @@ function renderStockBalanceTable() {
     `;
   }).join('');
 }
+
+window.setStockStatusFilter = function(status) {
+  const select = document.getElementById('stock-status-filter');
+  if (select) select.value = status;
+
+  document.querySelectorAll('.stock-pill-btn').forEach(btn => {
+    const s = btn.getAttribute('data-status') || '';
+    if (s === status) {
+      btn.className = 'stock-pill-btn active px-2.5 py-1 rounded-full border border-brand-700 bg-brand-700 text-white font-medium hover:opacity-90 transition text-xs';
+    } else {
+      btn.className = 'stock-pill-btn px-2.5 py-1 rounded-full border border-slate-200 bg-white text-slate-700 hover:bg-slate-100 transition text-xs';
+    }
+  });
+
+  state.stockPagination.page = 1;
+  loadStockBalance();
+};
 
 function setupStockSearchAutocomplete() {
   const input = document.getElementById('stock-search');
@@ -1227,11 +1288,23 @@ function selectBuyItem(itemCode) {
   document.getElementById('buy-item-code').value = item.item_code;
   document.getElementById('buy-item-suggestions').classList.add('hidden');
 
-  const infoBox = document.getElementById('buy-item-info');
-  infoBox.classList.remove('hidden');
-  document.getElementById('buy-preview-name').textContent = item.item_name;
-  document.getElementById('buy-preview-cat').textContent = item.category;
-  document.getElementById('buy-preview-unit').textContent = item.unit;
+  const alertBox = document.getElementById('buy-stock-alert-box') || document.getElementById('buy-item-info');
+  if (alertBox) alertBox.classList.remove('hidden');
+  const previewName = document.getElementById('buy-preview-name');
+  if (previewName) previewName.textContent = item.item_name;
+  const stockBadge = document.getElementById('buy-current-stock-badge');
+  if (stockBadge) stockBadge.textContent = `คงเหลือ ${Number(item.balance_qty || 0).toLocaleString()} ${item.unit}`;
+  const catEl = document.getElementById('buy-preview-cat');
+  if (catEl) catEl.textContent = item.category;
+  const avgPriceEl = document.getElementById('buy-current-avg-price');
+  if (avgPriceEl) avgPriceEl.textContent = Number(item.avg_unit_price || 0).toFixed(2);
+  const minStockEl = document.getElementById('buy-current-min-stock');
+  if (minStockEl) minStockEl.textContent = Number(item.min_stock || 0).toLocaleString();
+
+  // If unit price field is empty, prefill average price
+  if (item.avg_unit_price && !document.getElementById('buy-price').value) {
+    document.getElementById('buy-price').value = item.avg_unit_price;
+  }
 
   // Auto-focus quantity input
   document.getElementById('buy-qty').focus();
@@ -1243,7 +1316,8 @@ function clearBuyItemInputs() {
   document.getElementById('buy-qty').value = '';
   document.getElementById('buy-price').value = '';
   document.getElementById('buy-total-price').value = '';
-  document.getElementById('buy-item-info').classList.add('hidden');
+  const alertBox = document.getElementById('buy-stock-alert-box') || document.getElementById('buy-item-info');
+  if (alertBox) alertBox.classList.add('hidden');
   document.getElementById('buy-item-suggestions').classList.add('hidden');
 }
 
@@ -1378,7 +1452,7 @@ async function loadRecentBuys(page = 1) {
       <td class="py-2.5 px-3 text-right font-mono font-semibold text-emerald-700">+${Number(b.quantity).toLocaleString()} ${b.unit}</td>
       <td class="py-2.5 px-3 text-right font-mono text-slate-600">${Number(b.price_per_unit).toFixed(2)}</td>
       <td class="py-2.5 px-3 text-right font-mono font-bold text-slate-900">${Number(b.total_price).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
-      <td class="py-2.5 px-3 text-slate-600 truncate max-w-xs">${b.shop_name}</td>
+      <td class="py-2.5 px-3 text-slate-700">${formatExpandableCell(b.shop_name)}</td>
     </tr>
   `).join('');
 }
@@ -1766,7 +1840,7 @@ async function loadRecentPays(page = 1) {
       <td class="py-2.5 px-3 text-right font-mono font-semibold text-rose-700">-${Number(p.quantity).toLocaleString()} ${p.unit}</td>
       <td class="py-2.5 px-3 text-right font-mono text-slate-600">${Number(p.price_per_unit).toFixed(2)}</td>
       <td class="py-2.5 px-3 text-right font-mono font-bold text-slate-900">${Number(p.total_price).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
-      <td class="py-2.5 px-3 text-slate-700 font-medium truncate max-w-xs">${p.department}</td>
+      <td class="py-2.5 px-3 text-slate-700 font-medium">${formatExpandableCell(p.department)}</td>
     </tr>
   `).join('');
 }
@@ -1997,20 +2071,24 @@ async function loadUsersManagement() {
           </button>
         </td>
         <td class="py-3 px-4 text-center space-x-1 whitespace-nowrap">
-          <button onclick="openEditUserModal(${u.id})" class="text-xs bg-amber-50 hover:bg-amber-100 text-amber-800 px-2 py-1 rounded border border-amber-200 font-medium transition" title="แก้ไขข้อมูล">
-            <i class="fa-solid fa-user-pen"></i> แก้ไข
-          </button>
-          <button onclick="openResetPasswordModal(${u.id}, '${u.username}')" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded border border-slate-300 font-medium transition" title="รีเซ็ตรหัส">
-            <i class="fa-solid fa-key"></i>
-          </button>
-          ${u.id !== 1 ? `
+          ${isSuper || u.id === 1 ? `
+            <span class="inline-flex items-center text-xs text-slate-500 font-medium px-2.5 py-1 bg-slate-100 rounded-md border border-slate-200">
+              <i class="fa-solid fa-lock text-[10px] mr-1.5 text-slate-400"></i> บัญชีหลัก (ระบบล็อก ไม่สามารถแก้ไข/ลบได้)
+            </span>
+          ` : `
+            <button onclick="openEditUserModal(${u.id})" class="text-xs bg-amber-50 hover:bg-amber-100 text-amber-800 px-2 py-1 rounded border border-amber-200 font-medium transition" title="แก้ไขข้อมูล">
+              <i class="fa-solid fa-user-pen"></i> แก้ไข
+            </button>
+            <button onclick="openResetPasswordModal(${u.id}, '${u.username}')" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded border border-slate-300 font-medium transition" title="รีเซ็ตรหัส">
+              <i class="fa-solid fa-key"></i>
+            </button>
             <button onclick="toggleUserStatus(${u.id})" class="text-xs ${u.is_active === 1 ? 'bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-200' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-200'} px-1.5 py-1 rounded border font-medium transition" title="ระงับ/เปิดใช้">
               ${u.is_active === 1 ? '<i class="fa-solid fa-ban"></i>' : '<i class="fa-solid fa-check"></i>'}
             </button>
             <button onclick="openDeleteUserModal(${u.id})" class="text-xs bg-rose-50 hover:bg-rose-100 text-rose-700 px-2 py-1 rounded border border-rose-200 font-medium transition" title="ลบผู้ใช้">
               <i class="fa-solid fa-trash-can"></i> ลบ
             </button>
-          ` : '<span class="text-[11px] text-slate-400 font-mono px-1">หลัก</span>'}
+          `}
         </td>
       </tr>
     `;
@@ -2020,6 +2098,10 @@ async function loadUsersManagement() {
 function openEditUserModal(userId) {
   const user = state.users.find(u => u.id === userId);
   if (!user) return;
+  if (user.id === 1 || user.role === 'superadmin') {
+    showToast('ไม่อนุญาตให้แก้ไขข้อมูลบัญชี Superadmin', 'error');
+    return;
+  }
 
   document.getElementById('edit-user-id').value = user.id;
   document.getElementById('edit-user-username').value = user.username;
@@ -2034,8 +2116,8 @@ function openEditUserModal(userId) {
 function openDeleteUserModal(userId) {
   const user = state.users.find(u => u.id === userId);
   if (!user) return;
-  if (user.id === 1) {
-    showToast('ไม่อนุญาตให้ลบผู้ดูแลระบบสูงสุด id=1', 'error');
+  if (user.id === 1 || user.role === 'superadmin') {
+    showToast('ไม่อนุญาตให้ลบบัญชี Superadmin', 'error');
     return;
   }
 
@@ -2088,6 +2170,11 @@ function openResetPasswordModal(userId, username) {
 }
 
 async function toggleUserStatus(userId) {
+  const user = state.users.find(u => u.id === userId);
+  if (user && (user.id === 1 || user.role === 'superadmin')) {
+    showToast('ไม่อนุญาตให้ระงับการใช้งานบัญชี Superadmin', 'error');
+    return;
+  }
   const res = await apiRequest(`/api/admin/users/${userId}/toggle-status`, 'PUT');
   if (res.ok) {
     showToast(res.data.message || 'ปรับปรุงสถานะสำเร็จ', 'success');
@@ -2407,6 +2494,38 @@ function renderDashboardTrendChart(containerId, monthlyData = [], colorTheme = '
 // 11. Modal Utilities & Dropdown Helpers
 // ============================================================================
 
+function escapeHtml(str) {
+  if (str === null || str === undefined) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/**
+ * ฟังก์ชันย่อ/ขยายข้อความที่ยาวเกินไปในตาราง (ร้านค้า หรือ หน่วยงานที่เบิก)
+ */
+function formatExpandableCell(fullText, maxLen = 22) {
+  if (!fullText) return '<span class="text-slate-400">-</span>';
+  const text = String(fullText).trim();
+  if (text.length <= maxLen) {
+    return `<span class="font-medium text-slate-700">${escapeHtml(text)}</span>`;
+  }
+  const shortText = text.slice(0, maxLen) + '...';
+  const cellId = 'exp_' + Math.random().toString(36).substring(2, 9);
+  return `
+    <div class="inline-flex items-center space-x-1.5 max-w-[220px]" title="${escapeHtml(text)}">
+      <span id="${cellId}_short" class="font-medium text-slate-700 truncate">${escapeHtml(shortText)}</span>
+      <span id="${cellId}_full" class="hidden font-medium text-slate-700 whitespace-normal break-words">${escapeHtml(text)}</span>
+      <button type="button" onclick="const s=document.getElementById('${cellId}_short');const f=document.getElementById('${cellId}_full');const isH=f.classList.contains('hidden');if(isH){f.classList.remove('hidden');s.classList.add('hidden');this.innerHTML='<i class=\\'fa-solid fa-chevron-up\\'></i>';this.title='ย่อ';}else{f.classList.add('hidden');s.classList.remove('hidden');this.innerHTML='<i class=\\'fa-solid fa-chevron-down\\'></i>';this.title='ขยาย';}" class="text-[10px] text-teal-600 hover:text-teal-800 bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded shrink-0 transition" title="กดเพื่อขยาย/ย่อข้อความ">
+        <i class="fa-solid fa-chevron-down"></i>
+      </button>
+    </div>
+  `;
+}
+
 function openModal(id) {
   const modal = document.getElementById(id);
   if (modal) modal.classList.remove('hidden');
@@ -2548,8 +2667,32 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   });
 
+  function populateRememberedCredentials() {
+    const saved = localStorage.getItem('saiyok_remember_cred');
+    const uInput = document.getElementById('login-username');
+    const pInput = document.getElementById('login-password');
+    const remBox = document.getElementById('login-remember-me');
+    if (saved && uInput && pInput && remBox) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed.username) {
+          uInput.value = parsed.username;
+          pInput.value = parsed.password || '';
+          remBox.checked = true;
+          return;
+        }
+      } catch (e) {}
+    }
+    if (uInput && !saved) uInput.value = '';
+    if (pInput && !saved) pInput.value = '';
+    if (remBox) remBox.checked = false;
+  }
+
   // 3. Login Modal & Form
+  populateRememberedCredentials();
+
   document.getElementById('btn-open-login').addEventListener('click', () => {
+    populateRememberedCredentials();
     openModal('login-modal');
   });
 
@@ -2557,6 +2700,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     e.preventDefault();
     const username = document.getElementById('login-username').value.trim();
     const password = document.getElementById('login-password').value.trim();
+    const rememberCheckbox = document.getElementById('login-remember-me');
 
     const res = await apiRequest('/api/auth/login', 'POST', { username, password });
     if (res.ok && res.data.success) {
@@ -2564,6 +2708,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       state.currentUser = res.data.user;
       state.userPermissions = res.data.permissions;
       localStorage.setItem('saiyok_token', state.token);
+
+      if (rememberCheckbox && rememberCheckbox.checked) {
+        localStorage.setItem('saiyok_remember_cred', JSON.stringify({ username, password }));
+      } else {
+        localStorage.removeItem('saiyok_remember_cred');
+      }
 
       closeModal('login-modal');
       showToast(`ยินดีต้อนรับ ${state.currentUser.fullname}`, 'success');
@@ -2582,6 +2732,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     localStorage.removeItem('saiyok_token');
     showToast('ออกจากระบบเรียบร้อยแล้ว', 'info');
     updateAuthUI();
+    populateRememberedCredentials();
   });
 
   // 5. Stock Balance Search & Filters
