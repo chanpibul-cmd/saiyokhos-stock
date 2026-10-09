@@ -1628,20 +1628,19 @@ export default {
         const user = await db.prepare("SELECT id, role FROM users WHERE id = ?").bind(targetUserId).first();
         if (!user) return errorJson("ไม่พบผู้ใช้งานนี้", 404);
 
-        // ไม่อนุญาตให้แก้ไขบัญชี Superadmin (id=1 หรือ role=superadmin)
-        if (targetUserId === 1 || user.role === "superadmin") {
-          return errorJson("ไม่อนุญาตให้แก้ไขข้อมูลบัญชีผู้ดูแลระบบสูงสุด (Superadmin)", 403);
-        }
+        // หากเป็นบัญชี Superadmin (id=1 หรือ role=superadmin) ให้คงสิทธิ role เป็น superadmin เสมอ (ป้องกันการลดสิทธิตัวเอง)
+        const isSuperadminAccount = (targetUserId === 1 || user.role === "superadmin");
+        const finalRole = isSuperadminAccount ? "superadmin" : role;
 
         if (newPassword && newPassword.length >= 4) {
           const newHash = await sha256Hex(newPassword);
           await db.prepare(
             "UPDATE users SET fullname = ?, department = ?, role = ?, password_hash = ? WHERE id = ?"
-          ).bind(fullname, department, role, newHash, targetUserId).run();
+          ).bind(fullname, department, finalRole, newHash, targetUserId).run();
         } else {
           await db.prepare(
             "UPDATE users SET fullname = ?, department = ?, role = ? WHERE id = ?"
-          ).bind(fullname, department, role, targetUserId).run();
+          ).bind(fullname, department, finalRole, targetUserId).run();
         }
 
         return json({
@@ -1664,9 +1663,9 @@ export default {
         const user = await db.prepare("SELECT id, username, role FROM users WHERE id = ?").bind(targetUserId).first();
         if (!user) return errorJson("ไม่พบผู้ใช้งานนี้", 404);
 
-        // ไม่อนุญาตให้ลบบัญชี Superadmin
-        if (targetUserId === 1 || user.role === "superadmin") {
-          return errorJson("ไม่อนุญาตให้ลบบัญชีผู้ดูแลระบบสูงสุด (Superadmin) เด็ดขาด", 403);
+        // ไม่อนุญาตให้ลบบัญชี Superadmin หลัก (id=1) หรือบัญชีของตนเองที่ล็อกอินอยู่
+        if (targetUserId === 1) {
+          return errorJson("ไม่อนุญาตให้ลบบัญชีผู้ดูแลระบบสูงสุดหลัก (Root Superadmin) ของระบบ", 403);
         }
         if (targetUserId === authUser.userId) {
           return errorJson("ไม่อนุญาตให้ลบบัญชีของตนเองที่กำลังเข้าสู่ระบบอยู่", 400);

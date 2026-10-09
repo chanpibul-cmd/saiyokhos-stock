@@ -2299,34 +2299,26 @@ async function loadUsersManagement() {
           </button>
         </td>
         <td class="py-3 px-4 text-center space-x-1 whitespace-nowrap">
-          ${isSuper ? `
-            <div class="inline-flex items-center space-x-1">
-              <button disabled class="text-xs bg-slate-100 text-slate-400 px-2 py-1 rounded border border-slate-200 font-medium cursor-not-allowed opacity-50" title="Superadmin ไม่สามารถแก้ไขได้">
-                <i class="fa-solid fa-user-pen"></i> แก้ไข
-              </button>
-              <button disabled class="text-xs bg-slate-100 text-slate-400 px-2 py-1 rounded border border-slate-200 font-medium cursor-not-allowed opacity-50" title="Superadmin ไม่สามารถรีเซ็ตรหัสผ่านตรงนี้ได้">
-                <i class="fa-solid fa-key"></i>
-              </button>
-              <button disabled class="text-xs bg-slate-100 text-slate-400 px-1.5 py-1 rounded border border-slate-200 font-medium cursor-not-allowed opacity-50" title="Superadmin เปิดใช้งานตลอดเวลา">
-                <i class="fa-solid fa-lock"></i>
-              </button>
-              <button disabled class="text-xs bg-slate-100 text-slate-400 px-2 py-1 rounded border border-slate-200 font-medium cursor-not-allowed opacity-50" title="Superadmin ไม่สามารถลบได้">
-                <i class="fa-solid fa-trash-can"></i> ลบ
-              </button>
-              <span class="inline-flex items-center text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-medium ml-1">
-                <i class="fa-solid fa-shield-halved mr-1 text-amber-500"></i> ล็อก
-              </span>
-            </div>
+          <button onclick="openEditUserModal(${u.id})" class="text-xs bg-amber-50 hover:bg-amber-100 text-amber-800 px-2 py-1 rounded border border-amber-200 font-medium transition" title="แก้ไขข้อมูล">
+            <i class="fa-solid fa-user-pen"></i> แก้ไข
+          </button>
+          <button onclick="openResetPasswordModal(${u.id}, '${escapeHtml(u.username)}')" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded border border-slate-300 font-medium transition" title="รีเซ็ตรหัส">
+            <i class="fa-solid fa-key"></i>
+          </button>
+          ${u.id === 1 ? `
+            <button disabled class="text-xs bg-slate-100 text-slate-400 px-1.5 py-1 rounded border border-slate-200 font-medium cursor-not-allowed opacity-60" title="Superadmin หลักเปิดใช้งานตลอดเวลา">
+              <i class="fa-solid fa-lock"></i>
+            </button>
           ` : `
-            <button onclick="openEditUserModal(${u.id})" class="text-xs bg-amber-50 hover:bg-amber-100 text-amber-800 px-2 py-1 rounded border border-amber-200 font-medium transition" title="แก้ไขข้อมูล">
-              <i class="fa-solid fa-user-pen"></i> แก้ไข
-            </button>
-            <button onclick="openResetPasswordModal(${u.id}, '${u.username}')" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2 py-1 rounded border border-slate-300 font-medium transition" title="รีเซ็ตรหัส">
-              <i class="fa-solid fa-key"></i>
-            </button>
             <button onclick="toggleUserStatus(${u.id})" class="text-xs ${u.is_active === 1 ? 'bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-200' : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-200'} px-1.5 py-1 rounded border font-medium transition" title="ระงับ/เปิดใช้">
               ${u.is_active === 1 ? '<i class="fa-solid fa-ban"></i>' : '<i class="fa-solid fa-check"></i>'}
             </button>
+          `}
+          ${u.id === 1 ? `
+            <button disabled class="text-xs bg-slate-100 text-slate-400 px-2 py-1 rounded border border-slate-200 font-medium cursor-not-allowed opacity-60" title="Superadmin หลักไม่สามารถลบได้">
+              <i class="fa-solid fa-trash-can"></i> ลบ
+            </button>
+          ` : `
             <button onclick="openDeleteUserModal(${u.id})" class="text-xs bg-rose-50 hover:bg-rose-100 text-rose-700 px-2 py-1 rounded border border-rose-200 font-medium transition" title="ลบผู้ใช้">
               <i class="fa-solid fa-trash-can"></i> ลบ
             </button>
@@ -2340,15 +2332,20 @@ async function loadUsersManagement() {
 function openEditUserModal(userId) {
   const user = state.users.find(u => u.id === userId);
   if (!user) return;
-  if (user.id === 1 || user.role === 'superadmin') {
-    showToast('ไม่อนุญาตให้แก้ไขข้อมูลบัญชี Superadmin', 'error');
-    return;
-  }
 
   document.getElementById('edit-user-id').value = user.id;
   document.getElementById('edit-user-username').value = user.username;
   document.getElementById('edit-user-fullname').value = user.fullname;
-  document.getElementById('edit-user-role').value = user.role;
+  const roleSelect = document.getElementById('edit-user-role');
+  roleSelect.value = user.role;
+  // If user is root superadmin or role is superadmin, keep role locked to prevent accidental lockout
+  if (user.id === 1 || user.role === 'superadmin') {
+    roleSelect.disabled = true;
+    roleSelect.title = 'บทบาท Superadmin ไม่สามารถเปลี่ยนได้';
+  } else {
+    roleSelect.disabled = false;
+    roleSelect.title = '';
+  }
   document.getElementById('edit-user-dept').value = user.department;
   document.getElementById('edit-user-password').value = '';
 
@@ -2358,8 +2355,12 @@ function openEditUserModal(userId) {
 function openDeleteUserModal(userId) {
   const user = state.users.find(u => u.id === userId);
   if (!user) return;
-  if (user.id === 1 || user.role === 'superadmin') {
-    showToast('ไม่อนุญาตให้ลบบัญชี Superadmin', 'error');
+  if (user.id === 1) {
+    showToast('ไม่อนุญาตให้ลบบัญชีผู้ดูแลระบบสูงสุดหลัก (Root Superadmin) ของระบบ', 'warning');
+    return;
+  }
+  if (state.currentUser && user.id === state.currentUser.id) {
+    showToast('ไม่สามารถลบบัญชีของตนเองที่กำลังเข้าสู่ระบบอยู่ได้', 'warning');
     return;
   }
 
@@ -2769,14 +2770,41 @@ function formatExpandableCell(fullText, maxLen = 22) {
 }
 
 function openModal(id) {
-  const modal = document.getElementById(id);
+  if (!id) return;
+  const cleanId = id.toString().replace(/^#/, '');
+  const modal = document.getElementById(cleanId);
   if (modal) modal.classList.remove('hidden');
 }
 
 function closeModal(id) {
-  const modal = document.getElementById(id);
-  if (modal) modal.classList.add('hidden');
+  if (!id) {
+    document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.add('hidden'));
+    return;
+  }
+  const cleanId = id.toString().replace(/^#/, '');
+  const modal = document.getElementById(cleanId);
+  if (modal) {
+    modal.classList.add('hidden');
+  }
 }
+
+// Global modal dismiss listeners (click outside & Escape key)
+document.addEventListener('click', (e) => {
+  if (e.target && e.target.classList && e.target.classList.contains('modal-backdrop')) {
+    e.target.classList.add('hidden');
+  }
+  const closeBtn = e.target && e.target.closest && e.target.closest('.modal-close-btn');
+  if (closeBtn) {
+    const backdrop = closeBtn.closest('.modal-backdrop');
+    if (backdrop) backdrop.classList.add('hidden');
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.modal-backdrop:not(.hidden)').forEach(m => m.classList.add('hidden'));
+  }
+});
 
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
@@ -3321,22 +3349,30 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (formUserEdit) {
     formUserEdit.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const userId = document.getElementById('edit-user-id').value;
+      const userId = parseInt(document.getElementById('edit-user-id').value);
+      const user = state.users.find(u => u.id === userId);
+      const isSuper = user && (user.id === 1 || user.role === 'superadmin');
+
       const data = {
         fullname: document.getElementById('edit-user-fullname').value.trim(),
-        role: document.getElementById('edit-user-role').value,
+        role: isSuper ? 'superadmin' : document.getElementById('edit-user-role').value,
         department: document.getElementById('edit-user-dept').value.trim()
       };
-      const pw = document.getElementById('edit-user-password').value;
+      const pw = document.getElementById('edit-user-password').value.trim();
       if (pw) data.password = pw;
 
       const res = await apiRequest(`/api/admin/users/${userId}`, 'PUT', data);
-      if (res.ok) {
+      if (res.ok && res.data.success) {
         showToast(res.data.message || 'แก้ไขข้อมูลผู้ใช้สำเร็จ', 'success');
         closeModal('user-edit-modal');
-        loadUsersManagement();
+        await loadUsersManagement();
+        if (state.currentUser && state.currentUser.id === userId) {
+          state.currentUser.fullname = data.fullname;
+          state.currentUser.department = data.department;
+          updateAuthUI();
+        }
       } else {
-        showToast(res.data.message || 'เกิดข้อผิดพลาดในการแก้ไข', 'error');
+        showToast((res.data && res.data.message) || 'เกิดข้อผิดพลาดในการแก้ไข', 'error');
       }
     });
   }
@@ -3347,12 +3383,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     btnConfirmDeleteUser.addEventListener('click', async () => {
       const userId = document.getElementById('delete-user-id').value;
       const res = await apiRequest(`/api/admin/users/${userId}`, 'DELETE');
-      if (res.ok) {
+      if (res.ok && res.data.success) {
         showToast(res.data.message || 'ลบผู้ใช้งานสำเร็จ', 'success');
         closeModal('user-delete-modal');
-        loadUsersManagement();
+        await loadUsersManagement();
       } else {
-        showToast(res.data.message || 'ไม่สามารถลบผู้ใช้งานได้', 'error');
+        showToast((res.data && res.data.message) || 'ไม่สามารถลบผู้ใช้งานได้', 'error');
       }
     });
   }
