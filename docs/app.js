@@ -40,6 +40,7 @@ const state = {
   isOnlineWorker: false,
   stockItems: [],
   categories: [],
+  items: [],
   shops: [],
   users: [],
   recentBuys: [],
@@ -50,6 +51,18 @@ const state = {
     page: 1,
     pageSize: 25,
     filteredItems: []
+  },
+  itemsPagination: {
+    page: 1,
+    pageSize: 25,
+    search: '',
+    category: '',
+    status: ''
+  },
+  shopsPagination: {
+    page: 1,
+    pageSize: 15,
+    search: ''
   },
   buysPagination: {
     page: 1,
@@ -1984,53 +1997,268 @@ async function fetchStockCardReport() {
 async function loadItemsMaster() {
   const res = await apiRequest('/api/items');
   const tbody = document.getElementById('items-table-body');
-  if (!res.ok) return;
+  if (!res.ok) {
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="8" class="text-center py-6 text-rose-500 font-medium">ไม่สามารถโหลดข้อมูลพัสดุได้ (${escapeHtml(res.data?.message || 'ข้อผิดพลาดเครือข่าย')})</td></tr>`;
+    }
+    return;
+  }
 
   const items = res.data.items || [];
-  tbody.innerHTML = items.map(i => `
-    <tr class="hover:bg-slate-50 border-b border-slate-100">
-      <td class="py-3 px-4 font-mono font-bold text-slate-900">${i.item_code}</td>
-      <td class="py-3 px-4 font-medium text-slate-800">${i.item_name}</td>
-      <td class="py-3 px-4 text-slate-600">${i.category}</td>
-      <td class="py-3 px-4 text-center font-medium">${i.unit}</td>
-      <td class="py-3 px-4 text-right font-mono text-amber-700">${Number(i.min_stock).toLocaleString()}</td>
-      <td class="py-3 px-4 text-right font-mono text-slate-600">${Number(i.max_stock).toLocaleString()}</td>
-      <td class="py-3 px-4 text-center">
-        <span class="px-2 py-0.5 rounded text-xs ${i.is_active === 1 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}">
-          ${i.is_active === 1 ? 'ใช้งาน' : 'ระงับ'}
-        </span>
-      </td>
-      <td class="py-3 px-4 text-center">
-        <button onclick="editItemModal(${JSON.stringify(i).replace(/"/g, '&quot;')})" class="text-indigo-600 hover:text-indigo-800 text-xs font-medium">
-          <i class="fa-solid fa-pen-to-square mr-1"></i> แก้ไข
-        </button>
-      </td>
-    </tr>
-  `).join('');
+  state.items = items;
+
+  // เติมตัวเลือกกลุ่มพัสดุในดรอปดาวน์
+  const catFilter = document.getElementById('items-category-filter');
+  if (catFilter) {
+    const curVal = state.itemsPagination.category || '';
+    const distinctCats = Array.from(new Set(items.map(i => (i.category || '').trim()).filter(Boolean))).sort();
+    catFilter.innerHTML = '<option value="">-- ทุกกลุ่มพัสดุ --</option>' +
+      distinctCats.map(c => `<option value="${escapeHtml(c)}" ${c === curVal ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+  }
+
+  renderItemsTable();
+}
+
+function renderItemsTable() {
+  const tbody = document.getElementById('items-table-body');
+  if (!tbody) return;
+
+  const search = (state.itemsPagination.search || '').toLowerCase().trim();
+  const category = (state.itemsPagination.category || '').trim();
+  const statusStr = state.itemsPagination.status !== undefined ? String(state.itemsPagination.status).trim() : '';
+
+  // 1. กรองข้อมูล
+  const filtered = (state.items || []).filter(i => {
+    if (search) {
+      const matchCode = (i.item_code || '').toLowerCase().includes(search);
+      const matchName = (i.item_name || '').toLowerCase().includes(search);
+      if (!matchCode && !matchName) return false;
+    }
+    if (category && (i.category || '').trim() !== category) {
+      return false;
+    }
+    if (statusStr !== '') {
+      const activeVal = i.is_active !== undefined ? Number(i.is_active) : 1;
+      if (activeVal !== Number(statusStr)) return false;
+    }
+    return true;
+  });
+
+  // 2. อัปเดต Badge ยอดรวม
+  const countBadge = document.getElementById('items-count-badge');
+  if (countBadge) {
+    countBadge.textContent = `พบ ${filtered.length} / ทั้งหมด ${(state.items || []).length} รายการ`;
+  }
+
+  // 3. คำนวณแบ่งหน้า
+  const pageSize = Number(state.itemsPagination.pageSize) || 0;
+  const totalPages = pageSize > 0 ? Math.max(1, Math.ceil(filtered.length / pageSize)) : 1;
+  if (state.itemsPagination.page > totalPages) state.itemsPagination.page = totalPages;
+  if (state.itemsPagination.page < 1) state.itemsPagination.page = 1;
+
+  const start = pageSize > 0 ? (state.itemsPagination.page - 1) * pageSize : 0;
+  const end = pageSize > 0 ? start + pageSize : filtered.length;
+  const pageItems = pageSize > 0 ? filtered.slice(start, end) : filtered;
+
+  // 4. อัปเดต Footer แสดงข้อมูลหน้า
+  const infoEl = document.getElementById('items-pagination-info');
+  if (infoEl) {
+    if (filtered.length === 0) {
+      infoEl.textContent = 'แสดง 0-0 จาก 0 รายการ';
+    } else {
+      infoEl.textContent = `แสดง ${start + 1}-${Math.min(end, filtered.length)} จาก ${filtered.length} รายการ`;
+    }
+  }
+
+  const pageNumEl = document.getElementById('items-page-number');
+  if (pageNumEl) {
+    pageNumEl.textContent = `${state.itemsPagination.page} / ${totalPages}`;
+  }
+
+  const prevBtn = document.getElementById('items-prev-page');
+  if (prevBtn) prevBtn.disabled = state.itemsPagination.page <= 1;
+
+  const nextBtn = document.getElementById('items-next-page');
+  if (nextBtn) nextBtn.disabled = state.itemsPagination.page >= totalPages;
+
+  // 5. แสดงผลแถวตาราง
+  if (pageItems.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="8" class="text-center py-8 text-slate-400">
+          <i class="fa-solid fa-folder-open text-2xl text-slate-300 block mb-2"></i>
+          ไม่พบข้อมูลพัสดุตามเงื่อนไขที่ค้นหา
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  tbody.innerHTML = pageItems.map(i => {
+    const isActive = i.is_active !== undefined ? Number(i.is_active) === 1 : true;
+    const itemJson = JSON.stringify(i).replace(/"/g, '&quot;');
+    return `
+      <tr class="hover:bg-slate-50 border-b border-slate-100 transition">
+        <td class="py-3 px-4 font-mono font-bold text-slate-900">${escapeHtml(i.item_code)}</td>
+        <td class="py-3 px-4 font-medium text-slate-800">${escapeHtml(i.item_name)}</td>
+        <td class="py-3 px-4 text-slate-600 text-xs">
+          <span class="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-medium">${escapeHtml(i.category || '-')}</span>
+        </td>
+        <td class="py-3 px-4 text-center font-medium text-slate-700">${escapeHtml(i.unit || '-')}</td>
+        <td class="py-3 px-4 text-right font-mono text-amber-700 font-medium">${Number(i.min_stock || 0).toLocaleString()}</td>
+        <td class="py-3 px-4 text-right font-mono text-slate-600">${Number(i.max_stock || 0).toLocaleString()}</td>
+        <td class="py-3 px-4 text-center">
+          <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${isActive ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-rose-100 text-rose-800 border border-rose-200'}">
+            <span class="w-1.5 h-1.5 rounded-full mr-1.5 ${isActive ? 'bg-emerald-500' : 'bg-rose-500'}"></span>
+            ${isActive ? 'ใช้งานปกติ' : 'ระงับใช้งาน'}
+          </span>
+        </td>
+        <td class="py-3 px-4 text-center">
+          <div class="inline-flex items-center justify-center space-x-1.5">
+            <button onclick="editItemModal(${itemJson})" class="text-indigo-600 hover:text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-xs font-medium px-2 py-1 rounded transition" title="แก้ไขข้อมูลพัสดุ">
+              <i class="fa-solid fa-pen-to-square mr-1"></i> แก้ไข
+            </button>
+            <button onclick="toggleItemStatus(${i.id}, ${isActive ? 0 : 1})" class="text-xs ${isActive ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'} border px-2 py-1 rounded font-medium transition" title="${isActive ? 'คลิกเพื่อระงับใช้งาน' : 'คลิกเพื่อเปิดใช้งาน'}">
+              <i class="fa-solid ${isActive ? 'fa-ban' : 'fa-check'} mr-1"></i> ${isActive ? 'ระงับ' : 'เปิดใช้'}
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function toggleItemStatus(itemId, newStatus) {
+  const res = await apiRequest(`/api/items/${itemId}/toggle-status`, 'PUT');
+  if (res.ok) {
+    showToast(res.data.message || 'เปลี่ยนสถานะเรียบร้อยแล้ว', 'success');
+    const it = (state.items || []).find(x => x.id === itemId);
+    if (it) it.is_active = newStatus;
+    renderItemsTable();
+    loadStockBalance();
+  } else {
+    // Fallback: หาก endpoint toggle ยังไม่พร้อม ให้ fallback ไปยัง PUT /api/items/:id ทั่วไป
+    const item = (state.items || []).find(x => x.id === itemId);
+    if (item) {
+      const fallbackRes = await apiRequest(`/api/items/${itemId}`, 'PUT', {
+        item_name: item.item_name,
+        unit: item.unit,
+        category: item.category,
+        min_stock: item.min_stock,
+        max_stock: item.max_stock,
+        is_active: newStatus
+      });
+      if (fallbackRes.ok) {
+        showToast('เปลี่ยนสถานะเรียบร้อยแล้ว', 'success');
+        item.is_active = newStatus;
+        renderItemsTable();
+        loadStockBalance();
+        return;
+      }
+    }
+    showToast(res.data?.message || 'ไม่สามารถเปลี่ยนสถานะได้', 'error');
+  }
 }
 
 async function loadShopsMaster() {
   const res = await apiRequest('/api/shops');
   const tbody = document.getElementById('shops-table-body');
-  if (!res.ok) return;
+  if (!res.ok) {
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-rose-500 font-medium">ไม่สามารถโหลดข้อมูลร้านค้าได้ (${escapeHtml(res.data?.message || 'ข้อผิดพลาดเครือข่าย')})</td></tr>`;
+    }
+    return;
+  }
 
   const shops = res.data.shops || [];
   state.shops = shops;
+  renderShopsTable();
+}
 
-  tbody.innerHTML = shops.map((s, idx) => `
-    <tr class="hover:bg-slate-50 border-b border-slate-100">
-      <td class="py-3 px-4 font-mono text-slate-400">${idx + 1}</td>
-      <td class="py-3 px-4 font-bold text-slate-800">${s.shop_name}</td>
-      <td class="py-3 px-4 text-slate-600">${s.address || '-'}</td>
-      <td class="py-3 px-4 font-mono text-slate-600">${s.phone || '-'}</td>
-      <td class="py-3 px-4 font-mono text-slate-600">${s.tax_id || '-'}</td>
-      <td class="py-3 px-4 text-center">
-        <button onclick="editShopModal(${JSON.stringify(s).replace(/"/g, '&quot;')})" class="text-amber-600 hover:text-amber-800 text-xs font-medium">
-          <i class="fa-solid fa-pen-to-square mr-1"></i> แก้ไข
-        </button>
-      </td>
-    </tr>
-  `).join('');
+function renderShopsTable() {
+  const tbody = document.getElementById('shops-table-body');
+  if (!tbody) return;
+
+  const search = (state.shopsPagination.search || '').toLowerCase().trim();
+
+  // 1. กรองข้อมูลร้านค้า
+  const filtered = (state.shops || []).filter(s => {
+    if (!search) return true;
+    const matchName = (s.shop_name || '').toLowerCase().includes(search);
+    const matchAddress = (s.address || '').toLowerCase().includes(search);
+    const matchPhone = (s.phone || '').includes(search);
+    const matchTax = (s.tax_id || '').includes(search);
+    return matchName || matchAddress || matchPhone || matchTax;
+  });
+
+  // 2. อัปเดต Badge ยอดรวม
+  const countBadge = document.getElementById('shops-count-badge');
+  if (countBadge) {
+    countBadge.textContent = `พบ ${filtered.length} / ทั้งหมด ${(state.shops || []).length} ร้านค้า`;
+  }
+
+  // 3. แบ่งหน้า
+  const pageSize = Number(state.shopsPagination.pageSize) || 0;
+  const totalPages = pageSize > 0 ? Math.max(1, Math.ceil(filtered.length / pageSize)) : 1;
+  if (state.shopsPagination.page > totalPages) state.shopsPagination.page = totalPages;
+  if (state.shopsPagination.page < 1) state.shopsPagination.page = 1;
+
+  const start = pageSize > 0 ? (state.shopsPagination.page - 1) * pageSize : 0;
+  const end = pageSize > 0 ? start + pageSize : filtered.length;
+  const pageShops = pageSize > 0 ? filtered.slice(start, end) : filtered;
+
+  // 4. อัปเดต Footer แสดงข้อมูลหน้า
+  const infoEl = document.getElementById('shops-pagination-info');
+  if (infoEl) {
+    if (filtered.length === 0) {
+      infoEl.textContent = 'แสดง 0-0 จาก 0 ร้านค้า';
+    } else {
+      infoEl.textContent = `แสดง ${start + 1}-${Math.min(end, filtered.length)} จาก ${filtered.length} ร้านค้า`;
+    }
+  }
+
+  const pageNumEl = document.getElementById('shops-page-number');
+  if (pageNumEl) {
+    pageNumEl.textContent = `${state.shopsPagination.page} / ${totalPages}`;
+  }
+
+  const prevBtn = document.getElementById('shops-prev-page');
+  if (prevBtn) prevBtn.disabled = state.shopsPagination.page <= 1;
+
+  const nextBtn = document.getElementById('shops-next-page');
+  if (nextBtn) nextBtn.disabled = state.shopsPagination.page >= totalPages;
+
+  // 5. แสดงผลแถวตาราง
+  if (pageShops.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="6" class="text-center py-8 text-slate-400">
+          <i class="fa-solid fa-store-slash text-2xl text-slate-300 block mb-2"></i>
+          ไม่พบข้อมูลร้านค้าตามเงื่อนไขที่ค้นหา
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  tbody.innerHTML = pageShops.map((s, idx) => {
+    const shopJson = JSON.stringify(s).replace(/"/g, '&quot;');
+    const rowNum = start + idx + 1;
+    return `
+      <tr class="hover:bg-slate-50 border-b border-slate-100 transition">
+        <td class="py-3 px-4 font-mono text-slate-400">${rowNum}</td>
+        <td class="py-3 px-4 font-bold text-slate-800">${escapeHtml(s.shop_name)}</td>
+        <td class="py-3 px-4 text-slate-600 text-xs">${escapeHtml(s.address || '-')}</td>
+        <td class="py-3 px-4 font-mono text-slate-600 text-xs">${escapeHtml(s.phone || '-')}</td>
+        <td class="py-3 px-4 font-mono text-slate-600 text-xs">${escapeHtml(s.tax_id || '-')}</td>
+        <td class="py-3 px-4 text-center">
+          <button onclick="editShopModal(${shopJson})" class="text-amber-700 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-xs font-medium px-2.5 py-1 rounded transition" title="แก้ไขข้อมูลร้านค้า">
+            <i class="fa-solid fa-pen-to-square mr-1"></i> แก้ไข
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
 }
 
 // ============================================================================
@@ -2046,18 +2274,18 @@ async function loadUsersManagement() {
   state.users = users;
 
   tbody.innerHTML = users.map(u => {
-    const isSuper = u.role === 'superadmin';
+    const isSuper = u.role === 'superadmin' || u.id === 1;
     const activeClass = u.is_active === 1 ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800';
     const activeText = u.is_active === 1 ? 'ใช้งานปกติ' : 'ระงับใช้งาน';
 
     return `
       <tr class="hover:bg-slate-50 border-b border-slate-100">
-        <td class="py-3 px-4 font-mono font-bold text-slate-900">${u.username}</td>
-        <td class="py-3 px-4 font-medium text-slate-800">${u.fullname}</td>
-        <td class="py-3 px-4 text-slate-600 text-xs">${u.department}</td>
+        <td class="py-3 px-4 font-mono font-bold text-slate-900">${escapeHtml(u.username)}</td>
+        <td class="py-3 px-4 font-medium text-slate-800">${escapeHtml(u.fullname)}</td>
+        <td class="py-3 px-4 text-slate-600 text-xs">${escapeHtml(u.department)}</td>
         <td class="py-3 px-4 text-center">
           <span class="px-2 py-0.5 rounded text-xs font-mono font-bold ${isSuper ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-700'}">
-            ${u.role.toUpperCase()}
+            ${escapeHtml(u.role.toUpperCase())}
           </span>
         </td>
         <td class="py-3 px-4 text-center">
@@ -2071,10 +2299,24 @@ async function loadUsersManagement() {
           </button>
         </td>
         <td class="py-3 px-4 text-center space-x-1 whitespace-nowrap">
-          ${isSuper || u.id === 1 ? `
-            <span class="inline-flex items-center text-xs text-slate-500 font-medium px-2.5 py-1 bg-slate-100 rounded-md border border-slate-200">
-              <i class="fa-solid fa-lock text-[10px] mr-1.5 text-slate-400"></i> บัญชีหลัก (ระบบล็อก ไม่สามารถแก้ไข/ลบได้)
-            </span>
+          ${isSuper ? `
+            <div class="inline-flex items-center space-x-1">
+              <button disabled class="text-xs bg-slate-100 text-slate-400 px-2 py-1 rounded border border-slate-200 font-medium cursor-not-allowed opacity-50" title="Superadmin ไม่สามารถแก้ไขได้">
+                <i class="fa-solid fa-user-pen"></i> แก้ไข
+              </button>
+              <button disabled class="text-xs bg-slate-100 text-slate-400 px-2 py-1 rounded border border-slate-200 font-medium cursor-not-allowed opacity-50" title="Superadmin ไม่สามารถรีเซ็ตรหัสผ่านตรงนี้ได้">
+                <i class="fa-solid fa-key"></i>
+              </button>
+              <button disabled class="text-xs bg-slate-100 text-slate-400 px-1.5 py-1 rounded border border-slate-200 font-medium cursor-not-allowed opacity-50" title="Superadmin เปิดใช้งานตลอดเวลา">
+                <i class="fa-solid fa-lock"></i>
+              </button>
+              <button disabled class="text-xs bg-slate-100 text-slate-400 px-2 py-1 rounded border border-slate-200 font-medium cursor-not-allowed opacity-50" title="Superadmin ไม่สามารถลบได้">
+                <i class="fa-solid fa-trash-can"></i> ลบ
+              </button>
+              <span class="inline-flex items-center text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 font-medium ml-1">
+                <i class="fa-solid fa-shield-halved mr-1 text-amber-500"></i> ล็อก
+              </span>
+            </div>
           ` : `
             <button onclick="openEditUserModal(${u.id})" class="text-xs bg-amber-50 hover:bg-amber-100 text-amber-800 px-2 py-1 rounded border border-amber-200 font-medium transition" title="แก้ไขข้อมูล">
               <i class="fa-solid fa-user-pen"></i> แก้ไข
@@ -3262,19 +3504,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('item-modal-title').textContent = 'เพิ่มพัสดุใหม่';
     document.getElementById('modal-item-id').value = '';
     document.getElementById('form-item-modal').reset();
+    const codeInput = document.getElementById('modal-item-code');
+    if (codeInput) {
+      codeInput.value = '';
+      codeInput.readOnly = false;
+    }
+    const statusSelect = document.getElementById('modal-item-status');
+    if (statusSelect) statusSelect.value = '1';
     openModal('item-modal');
   });
 
   document.getElementById('form-item-modal').addEventListener('submit', async (e) => {
     e.preventDefault();
     const id = document.getElementById('modal-item-id').value;
+    const statusSelect = document.getElementById('modal-item-status');
     const data = {
       item_code: document.getElementById('modal-item-code').value.trim(),
       item_name: document.getElementById('modal-item-name').value.trim(),
       unit: document.getElementById('modal-item-unit').value.trim(),
       category: document.getElementById('modal-item-category').value.trim(),
       min_stock: parseFloat(document.getElementById('modal-item-min').value) || 0,
-      max_stock: parseFloat(document.getElementById('modal-item-max').value) || 0
+      max_stock: parseFloat(document.getElementById('modal-item-max').value) || 0,
+      is_active: statusSelect ? (parseInt(statusSelect.value, 10) || 0) : 1
     };
 
     const endpoint = id ? `/api/items/${id}` : '/api/items';
@@ -3442,6 +3693,114 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
   }
+
+  // 17. Items Master Search, Filter & Pagination Listeners
+  const itemsSearch = document.getElementById('items-search');
+  if (itemsSearch) {
+    itemsSearch.addEventListener('input', debounce((e) => {
+      state.itemsPagination.search = e.target.value;
+      state.itemsPagination.page = 1;
+      renderItemsTable();
+    }, 200));
+  }
+
+  const itemsCatFilter = document.getElementById('items-category-filter');
+  if (itemsCatFilter) {
+    itemsCatFilter.addEventListener('change', (e) => {
+      state.itemsPagination.category = e.target.value;
+      state.itemsPagination.page = 1;
+      renderItemsTable();
+    });
+  }
+
+  const itemsStatusFilter = document.getElementById('items-status-filter');
+  if (itemsStatusFilter) {
+    itemsStatusFilter.addEventListener('change', (e) => {
+      state.itemsPagination.status = e.target.value;
+      state.itemsPagination.page = 1;
+      renderItemsTable();
+    });
+  }
+
+  const itemsPageSize = document.getElementById('items-page-size');
+  if (itemsPageSize) {
+    itemsPageSize.addEventListener('change', (e) => {
+      state.itemsPagination.pageSize = Number(e.target.value);
+      state.itemsPagination.page = 1;
+      renderItemsTable();
+    });
+  }
+
+  const btnItemsPrev = document.getElementById('items-prev-page');
+  if (btnItemsPrev) {
+    btnItemsPrev.addEventListener('click', () => {
+      if (state.itemsPagination.page > 1) {
+        state.itemsPagination.page--;
+        renderItemsTable();
+      }
+    });
+  }
+
+  const btnItemsNext = document.getElementById('items-next-page');
+  if (btnItemsNext) {
+    btnItemsNext.addEventListener('click', () => {
+      state.itemsPagination.page++;
+      renderItemsTable();
+    });
+  }
+
+  const btnReloadItems = document.getElementById('btn-reload-items');
+  if (btnReloadItems) {
+    btnReloadItems.addEventListener('click', () => {
+      loadItemsMaster();
+      showToast('รีเฟรชข้อมูลพัสดุเรียบร้อย', 'info');
+    });
+  }
+
+  // 18. Shops Master Search & Pagination Listeners
+  const shopsSearch = document.getElementById('shops-search');
+  if (shopsSearch) {
+    shopsSearch.addEventListener('input', debounce((e) => {
+      state.shopsPagination.search = e.target.value;
+      state.shopsPagination.page = 1;
+      renderShopsTable();
+    }, 200));
+  }
+
+  const shopsPageSize = document.getElementById('shops-page-size');
+  if (shopsPageSize) {
+    shopsPageSize.addEventListener('change', (e) => {
+      state.shopsPagination.pageSize = Number(e.target.value);
+      state.shopsPagination.page = 1;
+      renderShopsTable();
+    });
+  }
+
+  const btnShopsPrev = document.getElementById('shops-prev-page');
+  if (btnShopsPrev) {
+    btnShopsPrev.addEventListener('click', () => {
+      if (state.shopsPagination.page > 1) {
+        state.shopsPagination.page--;
+        renderShopsTable();
+      }
+    });
+  }
+
+  const btnShopsNext = document.getElementById('shops-next-page');
+  if (btnShopsNext) {
+    btnShopsNext.addEventListener('click', () => {
+      state.shopsPagination.page++;
+      renderShopsTable();
+    });
+  }
+
+  const btnReloadShops = document.getElementById('btn-reload-shops');
+  if (btnReloadShops) {
+    btnReloadShops.addEventListener('click', () => {
+      loadShopsMaster();
+      showToast('รีเฟรชข้อมูลร้านค้าเรียบร้อย', 'info');
+    });
+  }
 });
 
 // ============================================================================
@@ -3466,6 +3825,10 @@ function editItemModal(item) {
   document.getElementById('modal-item-category').value = item.category;
   document.getElementById('modal-item-min').value = item.min_stock;
   document.getElementById('modal-item-max').value = item.max_stock;
+  const statusEl = document.getElementById('modal-item-status');
+  if (statusEl) {
+    statusEl.value = (item.is_active !== undefined ? item.is_active : 1).toString();
+  }
   openModal('item-modal');
 }
 

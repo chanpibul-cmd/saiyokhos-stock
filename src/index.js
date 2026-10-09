@@ -542,11 +542,34 @@ export default {
           return errorJson(`รหัสพัสดุ "${item_code}" มีอยู่ในระบบแล้ว`, 400);
         }
 
+        const is_active = b.is_active !== undefined ? Number(b.is_active) : 1;
+
         await db.prepare(
-          "INSERT INTO items (item_code, item_name, unit, category, min_stock, max_stock, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)"
-        ).bind(item_code, item_name, unit, category, min_stock, max_stock).run();
+          "INSERT INTO items (item_code, item_name, unit, category, min_stock, max_stock, is_active) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ).bind(item_code, item_name, unit, category, min_stock, max_stock, is_active).run();
 
         return json({ success: true, message: "บันทึกรหัสพัสดุใหม่เรียบร้อยแล้ว" }, 201);
+      }
+
+      if (path.match(/^\/api\/items\/\d+\/toggle-status$/) && method === "PUT") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "items", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิแก้ไขข้อมูลพัสดุ", 403);
+
+        const itemId = path.split("/")[3];
+        const item = await db.prepare("SELECT id, item_code, is_active FROM items WHERE id = ?").bind(itemId).first();
+        if (!item) return errorJson("ไม่พบรหัสพัสดุนี้", 404);
+
+        const newStatus = item.is_active === 1 ? 0 : 1;
+        await db.prepare("UPDATE items SET is_active = ? WHERE id = ?").bind(newStatus, itemId).run();
+
+        return json({ 
+          success: true, 
+          message: `เปลี่ยนสถานะรหัส "${item.item_code}" เป็น ${newStatus === 1 ? 'ใช้งานปกติ' : 'ระงับใช้งาน'} เรียบร้อยแล้ว`, 
+          is_active: newStatus 
+        });
       }
 
       if (path.startsWith("/api/items/") && method === "PUT") {
