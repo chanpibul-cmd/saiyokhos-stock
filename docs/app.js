@@ -38,6 +38,8 @@ const state = {
   apiBaseUrl: localStorage.getItem('saiyok_api_url') || 'https://saiyok-hospital-stock.chanpibulwork.workers.dev',
   activePage: 'stock_balance',
   isOnlineWorker: false,
+  rawStockItems: [],
+  stockSummary: null,
   stockItems: [],
   categories: [],
   items: [],
@@ -1020,37 +1022,85 @@ function navigateToPage(pageKey) {
 // 5. Module 1: หน้าตรวจเช็คสต๊อกพัสดุ (Stock Balance)
 // ============================================================================
 
-async function loadStockBalance() {
-  const search = document.getElementById('stock-search').value.trim();
-  const category = document.getElementById('stock-category-filter').value;
-  const status = document.getElementById('stock-status-filter').value;
-
+async function loadStockBalance(forceFetch = false) {
   const tbody = document.getElementById('stock-table-body');
-  tbody.innerHTML = `<tr><td colspan="10" class="text-center py-8 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i> กำลังโหลดข้อมูล...</td></tr>`;
 
-  // เรียก API
-  const query = new URLSearchParams();
-  if (search) query.append('q', search);
-  if (category) query.append('category', category);
-  if (status) query.append('status', status);
+  // ถ้ามีข้อมูลในหน่วยความจำแล้ว และไม่ได้สั่งบังคับโหลดใหม่ ให้กรองใน memory ทันที (0 D1 Reads!)
+  if (!forceFetch && state.rawStockItems && state.rawStockItems.length > 0) {
+    applyStockFilters();
+    return;
+  }
 
-  const res = await apiRequest(`/api/public/stock?${query.toString()}`);
+  if (tbody) {
+    tbody.innerHTML = `<tr><td colspan="10" class="text-center py-8 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i> กำลังโหลดข้อมูล...</td></tr>`;
+  }
+
+  // เรียก API ดึงข้อมูลทั้งหมดรอบเดียวเพื่อเก็บใน memory
+  const res = await apiRequest('/api/public/stock');
   if (!res.ok) {
-    tbody.innerHTML = `<tr><td colspan="10" class="text-center py-6 text-rose-500">เกิดข้อผิดพลาดในการโหลดข้อมูล</td></tr>`;
+    if (tbody) tbody.innerHTML = `<tr><td colspan="10" class="text-center py-6 text-rose-500">เกิดข้อผิดพลาดในการโหลดข้อมูล</td></tr>`;
     return;
   }
 
   const { items, summary } = res.data;
-  state.stockItems = items || [];
-  state.stockPagination.filteredItems = items || [];
+  state.rawStockItems = items || [];
+  state.stockSummary = summary || null;
+
+  // กรองข้อมูลทันทีในเครื่อง Browser
+  applyStockFilters();
+}
+
+function applyStockFilters() {
+  const search = (document.getElementById('stock-search')?.value || '').toLowerCase().trim();
+  const category = (document.getElementById('stock-category-filter')?.value || '').trim();
+  const status = (document.getElementById('stock-status-filter')?.value || '').trim();
+
+  let filtered = state.rawStockItems || [];
+
+  if (search) {
+    filtered = filtered.filter(item => 
+      (item.item_code || '').toLowerCase().includes(search) || 
+      (item.item_name || '').toLowerCase().includes(search)
+    );
+  }
+
+  if (category) {
+    filtered = filtered.filter(item => item.category === category);
+  }
+
+  if (status) {
+    if (status === 'NORMAL' || status === 'LOW_STOCK' || status === 'OUT_OF_STOCK') {
+      filtered = filtered.filter(item => item.stock_status === status);
+    } else if (status === 'INACTIVE_45') {
+      filtered = filtered.filter(item => (item.days_inactive ?? 999) >= 45);
+    } else if (status === 'INACTIVE_90') {
+      filtered = filtered.filter(item => (item.days_inactive ?? 999) >= 90);
+    } else if (status === 'INACTIVE_180') {
+      filtered = filtered.filter(item => (item.days_inactive ?? 999) >= 180);
+    }
+  }
+
+  state.stockItems = filtered;
+  state.stockPagination.filteredItems = filtered;
+  state.stockPagination.page = 1;
 
   // อัปเดตการ์ด KPI สรุปผล
+  const summary = state.stockSummary;
   if (summary) {
-    document.getElementById('kpi-total-items').textContent = summary.total_items.toLocaleString();
-    document.getElementById('kpi-normal-count').textContent = summary.normal_count.toLocaleString();
-    document.getElementById('kpi-low-count').textContent = summary.low_stock_count.toLocaleString();
-    document.getElementById('kpi-out-count').textContent = summary.out_of_stock_count.toLocaleString();
-    document.getElementById('stock-total-val-footer').textContent = `มูลค่ารวม: ${Number(summary.total_inventory_value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 })} บาท`;
+    const elTotal = document.getElementById('kpi-total-items');
+    const elNormal = document.getElementById('kpi-normal-count');
+    const elLow = document.getElementById('kpi-low-count');
+    const elOut = document.getElementById('kpi-out-count');
+    if (elTotal) elTotal.textContent = Number(summary.total_items || 0).toLocaleString();
+    if (elNormal) elNormal.textContent = Number(summary.normal_count || 0).toLocaleString();
+    if (elLow) elLow.textContent = Number(summary.low_stock_count || 0).toLocaleString();
+    if (elOut) elOut.textContent = Number(summary.out_of_stock_count || 0).toLocaleString();
+  }
+
+  const footerVal = filtered.reduce((s, it) => s + (Number(it.balance_val) || 0), 0);
+  const footerEl = document.getElementById('stock-total-val-footer');
+  if (footerEl) {
+    footerEl.textContent = `มูลค่ารวม (ที่แสดง): ${footerVal.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} บาท`;
   }
 
   // Setup Autocomplete Suggestions for Stock Search Input
@@ -1170,8 +1220,7 @@ window.setStockStatusFilter = function(status) {
     }
   });
 
-  state.stockPagination.page = 1;
-  loadStockBalance();
+  applyStockFilters();
 };
 
 function setupStockSearchAutocomplete() {
@@ -1179,15 +1228,16 @@ function setupStockSearchAutocomplete() {
   const suggestionsBox = document.getElementById('stock-search-suggestions');
   if (!input || !suggestionsBox) return;
 
-  input.oninput = debounce(() => {
+  input.oninput = () => {
     const val = input.value.trim().toLowerCase();
+    applyStockFilters();
+
     if (!val || val.length < 1) {
       suggestionsBox.classList.add('hidden');
-      loadStockBalance();
       return;
     }
 
-    const matches = (state.stockItems || []).filter(i => 
+    const matches = (state.rawStockItems || []).filter(i => 
       (i.item_code || '').toLowerCase().includes(val) || 
       (i.item_name || '').toLowerCase().includes(val)
     ).slice(0, 10);
@@ -1212,7 +1262,7 @@ function setupStockSearchAutocomplete() {
       </div>
     `).join('');
     suggestionsBox.classList.remove('hidden');
-  }, 200);
+  };
 
   // Close when clicking outside
   document.addEventListener('click', (e) => {
@@ -1227,7 +1277,7 @@ function selectStockAutocomplete(itemCode) {
   const suggestionsBox = document.getElementById('stock-search-suggestions');
   if (input) input.value = itemCode;
   if (suggestionsBox) suggestionsBox.classList.add('hidden');
-  loadStockBalance();
+  applyStockFilters();
 }
 
 // ============================================================================
@@ -3005,18 +3055,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     populateRememberedCredentials();
   });
 
-  // 5. Stock Balance Search & Filters
-  document.getElementById('stock-search').addEventListener('input', debounce(loadStockBalance, 300));
-  document.getElementById('stock-category-filter').addEventListener('change', () => {
-    state.stockPagination.page = 1;
-    loadStockBalance();
-  });
-  document.getElementById('stock-status-filter').addEventListener('change', () => {
-    state.stockPagination.page = 1;
-    loadStockBalance();
-  });
+  // 5. Stock Balance Search & Filters (Instant In-Memory Filtering, 0 D1 reads)
+  document.getElementById('stock-search').addEventListener('input', applyStockFilters);
+  document.getElementById('stock-category-filter').addEventListener('change', applyStockFilters);
+  document.getElementById('stock-status-filter').addEventListener('change', applyStockFilters);
   document.getElementById('btn-refresh-stock').addEventListener('click', () => {
-    loadStockBalance();
+    loadStockBalance(true);
     showToast('รีเฟรชข้อมูลสต๊อกเรียบร้อย', 'info');
   });
 
@@ -3186,7 +3230,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderBuyCart();
       clearBuyItemInputs();
       loadRecentBuys(1);
-      loadStockBalance();
+      loadStockBalance(true);
     } else {
       showToast(res.data.message || 'บันทึกรับเข้าล้มเหลว', 'error');
     }
@@ -3338,7 +3382,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderPayCart();
       clearPayItemInputs();
       loadRecentPays(1);
-      loadStockBalance();
+      loadStockBalance(true);
     } else {
       showToast(res.data.message || 'บันทึกเบิกจ่ายล้มเหลว', 'error');
     }
