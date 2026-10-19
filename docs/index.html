@@ -388,12 +388,18 @@
           </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <!-- Buy Form Card (5 cols on large screens) -->
-          <div class="lg:col-span-5 bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4 flex flex-col">
+        <div id="buy-grid-container" class="grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-300">
+          <!-- Buy Form Card (5 cols on large screens, expands to 12 when history hidden) -->
+          <div id="buy-form-card" class="lg:col-span-5 bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4 flex flex-col transition-all duration-300">
             <h2 class="text-base font-semibold text-slate-800 border-b border-slate-100 pb-3 flex items-center justify-between">
               <span>ฟอร์มบันทึกรับเข้าพัสดุ</span>
-              <span class="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-normal">รับเข้าคลัง</span>
+              <div class="flex items-center space-x-2">
+                <span class="text-xs bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded font-normal">รับเข้าคลัง</span>
+                <button type="button" id="btn-show-buys-history" class="hidden text-xs bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 px-2.5 py-1 rounded-lg transition flex items-center space-x-1" title="แสดงประวัติการรับเข้า">
+                  <i class="fa-solid fa-eye"></i>
+                  <span>แสดงประวัติ</span>
+                </button>
+              </div>
             </h2>
 
             <form id="form-buy" class="space-y-3.5 flex-1 flex flex-col justify-between">
@@ -449,20 +455,25 @@
                   </div>
                 </div>
 
-                <!-- Two-Way Price and Quantity Calculation -->
+                <!-- Two-Way Price and Quantity Calculation (จำนวน & ราคารวม คำนวณราคา/หน่วย อัตโนมัติ) -->
                 <div class="grid grid-cols-3 gap-2">
                   <div>
-                    <label class="block text-[11px] font-semibold text-slate-600 mb-0.5">จำนวน *</label>
+                    <label class="block text-[11px] font-semibold text-slate-600 mb-0.5">จำนวนรับเข้า *</label>
                     <input type="number" step="any" min="0.001" id="buy-qty" placeholder="0" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-emerald-500">
-                  </div>
-                  <div>
-                    <label class="block text-[11px] font-semibold text-slate-600 mb-0.5">ราคา/หน่วย (บ.)</label>
-                    <input type="number" step="any" min="0" id="buy-price" placeholder="0.00" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-emerald-500">
                   </div>
                   <div>
                     <label class="block text-[11px] font-semibold text-emerald-800 mb-0.5">ราคารวม (บ.) *</label>
                     <input type="number" step="any" min="0" id="buy-total-price" placeholder="0.00" class="w-full px-2.5 py-1.5 border border-emerald-300 bg-white font-bold text-emerald-700 rounded-lg text-xs font-mono focus:ring-2 focus:ring-emerald-500">
                   </div>
+                  <div>
+                    <label class="block text-[11px] font-semibold text-slate-600 mb-0.5">ราคา/หน่วย (บ.)</label>
+                    <input type="number" step="any" min="0" id="buy-price" placeholder="0.00" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-emerald-500">
+                  </div>
+                </div>
+
+                <div>
+                  <label class="block text-[11px] font-semibold text-slate-600 mb-0.5">หมายเหตุเฉพาะรายการพัสดุนี้</label>
+                  <input type="text" id="buy-item-remark" placeholder="เช่น ส่วนลดพิเศษ, ล็อต 2568, น้ำมันดีเซล B7 (ถ้ามี)" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500">
                 </div>
 
                 <div class="flex items-center space-x-2 pt-1">
@@ -500,8 +511,8 @@
               </div>
 
               <div>
-                <label class="block text-xs font-semibold text-slate-600 mb-1">หมายเหตุ</label>
-                <input type="text" id="buy-remark" placeholder="บันทึกข้อความเพิ่มเติม (ถ้ามี)" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500">
+                <label class="block text-xs font-semibold text-slate-600 mb-1">หมายเหตุทั้งบิล</label>
+                <input type="text" id="buy-remark" placeholder="บันทึกข้อความเพิ่มเติมประจำบิล (ถ้ามี)" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500">
               </div>
 
               <button type="submit" id="btn-submit-buy" class="w-full mt-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2.5 px-4 rounded-lg shadow-sm transition flex items-center justify-center space-x-2">
@@ -511,19 +522,23 @@
             </form>
           </div>
 
-          <!-- Recent Buys Table Card (7 cols on large screens) -->
-          <div class="lg:col-span-7 bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+          <!-- Recent Buys Table Card (7 cols on large screens, collapsible) -->
+          <div id="buy-history-card" class="lg:col-span-7 bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between transition-all duration-300">
             <div>
               <div class="sm:flex sm:items-center sm:justify-between border-b border-slate-100 pb-3 mb-3">
                 <h2 class="text-base font-semibold text-slate-800">ประวัติการรับเข้าพัสดุล่าสุด</h2>
                 <div class="mt-2 sm:mt-0 flex items-center space-x-2">
-                  <div class="relative w-48 sm:w-60">
+                  <div class="relative w-36 sm:w-52">
                     <i class="fa-solid fa-magnifying-glass absolute left-2.5 top-2 text-slate-400 text-xs"></i>
                     <input type="text" id="buys-history-search" placeholder="ค้นหาบิล, รหัส, ร้านค้า..." 
                            class="w-full pl-8 pr-2.5 py-1 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-brand-500">
                   </div>
-                  <button id="btn-reload-buys" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded-lg border border-slate-200 transition">
+                  <button id="btn-reload-buys" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded-lg border border-slate-200 transition" title="รีเฟรชประวัติ">
                     <i class="fa-solid fa-arrows-rotate"></i>
+                  </button>
+                  <button type="button" id="btn-toggle-buys-history" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded-lg border border-slate-200 transition flex items-center space-x-1" title="ซ่อนประวัติ">
+                    <i class="fa-solid fa-eye-slash" id="icon-toggle-buys"></i>
+                    <span id="text-toggle-buys">ซ่อนประวัติ</span>
                   </button>
                 </div>
               </div>
@@ -539,11 +554,12 @@
                       <th class="py-2.5 px-3 text-right">ราคา/หน่วย</th>
                       <th class="py-2.5 px-3 text-right font-bold">รวมเงิน</th>
                       <th class="py-2.5 px-3">ร้านค้า</th>
+                      <th class="py-2.5 px-2 text-center w-20">จัดการ</th>
                     </tr>
                   </thead>
                   <tbody id="recent-buys-table-body" class="divide-y divide-slate-100">
                     <tr>
-                      <td colspan="7" class="text-center py-8 text-slate-400">กำลังโหลดประวัติการรับเข้า...</td>
+                      <td colspan="8" class="text-center py-8 text-slate-400">กำลังโหลดประวัติการรับเข้า...</td>
                     </tr>
                   </tbody>
                 </table>
@@ -596,12 +612,18 @@
           </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <!-- Pay Form Card (5 cols on large screens) -->
-          <div class="lg:col-span-5 bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4 flex flex-col">
+        <div id="pay-grid-container" class="grid grid-cols-1 lg:grid-cols-12 gap-6 transition-all duration-300">
+          <!-- Pay Form Card (5 cols on large screens, expands to 12 when history hidden) -->
+          <div id="pay-form-card" class="lg:col-span-5 bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4 flex flex-col transition-all duration-300">
             <h2 class="text-base font-semibold text-slate-800 border-b border-slate-100 pb-3 flex items-center justify-between">
               <span>ฟอร์มเบิกจ่ายพัสดุ</span>
-              <span class="text-xs bg-teal-50 text-teal-700 border border-teal-200 px-2 py-0.5 rounded font-normal">จ่ายออกคลัง</span>
+              <div class="flex items-center space-x-2">
+                <span class="text-xs bg-teal-50 text-teal-700 border border-teal-200 px-2 py-0.5 rounded font-normal">จ่ายออกคลัง</span>
+                <button type="button" id="btn-show-pays-history" class="hidden text-xs bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200 px-2.5 py-1 rounded-lg transition flex items-center space-x-1" title="แสดงประวัติการเบิกจ่าย">
+                  <i class="fa-solid fa-eye"></i>
+                  <span>แสดงประวัติ</span>
+                </button>
+              </div>
             </h2>
 
             <form id="form-pay" class="space-y-3.5 flex-1 flex flex-col justify-between">
@@ -741,19 +763,23 @@
             </form>
           </div>
 
-          <!-- Recent Pays Table Card (7 cols on large screens) -->
-          <div class="lg:col-span-7 bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between">
+          <!-- Recent Pays Table Card (7 cols on large screens, collapsible) -->
+          <div id="pay-history-card" class="lg:col-span-7 bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex flex-col justify-between transition-all duration-300">
             <div>
               <div class="sm:flex sm:items-center sm:justify-between border-b border-slate-100 pb-3 mb-3">
                 <h2 class="text-base font-semibold text-slate-800">ประวัติการเบิกจ่ายพัสดุล่าสุด</h2>
                 <div class="mt-2 sm:mt-0 flex items-center space-x-2">
-                  <div class="relative w-48 sm:w-60">
+                  <div class="relative w-36 sm:w-52">
                     <i class="fa-solid fa-magnifying-glass absolute left-2.5 top-2 text-slate-400 text-xs"></i>
                     <input type="text" id="pays-history-search" placeholder="ค้นหาใบเบิก, พัสดุ, แผนก..." 
                            class="w-full pl-8 pr-2.5 py-1 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-brand-500">
                   </div>
-                  <button id="btn-reload-pays" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded-lg border border-slate-200 transition">
+                  <button id="btn-reload-pays" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded-lg border border-slate-200 transition" title="รีเฟรชประวัติ">
                     <i class="fa-solid fa-arrows-rotate"></i>
+                  </button>
+                  <button type="button" id="btn-toggle-pays-history" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded-lg border border-slate-200 transition flex items-center space-x-1" title="ซ่อนประวัติ">
+                    <i class="fa-solid fa-eye-slash" id="icon-toggle-pays"></i>
+                    <span id="text-toggle-pays">ซ่อนประวัติ</span>
                   </button>
                 </div>
               </div>
@@ -769,11 +795,12 @@
                       <th class="py-2.5 px-3 text-right">ราคา/หน่วย</th>
                       <th class="py-2.5 px-3 text-right font-bold">รวมมูลค่า</th>
                       <th class="py-2.5 px-3">หน่วยงานที่เบิก</th>
+                      <th class="py-2.5 px-2 text-center w-20">จัดการ</th>
                     </tr>
                   </thead>
                   <tbody id="recent-pays-table-body" class="divide-y divide-slate-100">
                     <tr>
-                      <td colspan="7" class="text-center py-8 text-slate-400">กำลังโหลดประวัติการเบิกจ่าย...</td>
+                      <td colspan="8" class="text-center py-8 text-slate-400">กำลังโหลดประวัติการเบิกจ่าย...</td>
                     </tr>
                   </tbody>
                 </table>
@@ -2076,6 +2103,151 @@
     </div>
   </div>
 
+  <!-- 9.1 EDIT BUY MODAL -->
+  <div id="buy-edit-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop hidden">
+    <div class="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden animate-fade-in border border-slate-100 max-h-[90vh] flex flex-col">
+      <div class="p-5 border-b border-slate-100 flex items-center justify-between bg-emerald-50/70 flex-shrink-0">
+        <h3 class="font-bold text-slate-800 flex items-center space-x-2">
+          <i class="fa-solid fa-pen-to-square text-emerald-600"></i>
+          <span>แก้ไขรายการรับเข้าพัสดุ</span>
+        </h3>
+        <button type="button" onclick="closeModal('buy-edit-modal')" class="modal-close-btn text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+
+      <form id="form-edit-buy-modal" class="p-6 space-y-3.5 overflow-y-auto flex-1 text-xs">
+        <input type="hidden" id="edit-buy-id">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">วันที่เอกสารรับเข้า *</label>
+            <input type="date" id="edit-buy-doc-date" required class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500">
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">เลขที่เอกสาร / บิล *</label>
+            <input type="text" id="edit-buy-doc-no" required class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">ร้านค้า / แหล่งรับเข้า *</label>
+          <select id="edit-buy-shop-name" required class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500">
+          </select>
+        </div>
+
+        <div class="p-3 bg-emerald-50/50 rounded-lg border border-emerald-100 space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-emerald-950">รายการพัสดุ</span>
+            <span id="edit-buy-unit-badge" class="font-mono text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded text-[11px]">หน่วย: -</span>
+          </div>
+          <select id="edit-buy-item-code" required class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500 bg-white">
+          </select>
+        </div>
+
+        <!-- Two-Way Price and Quantity Calculation -->
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="block font-semibold text-slate-700 mb-0.5">จำนวนรับเข้า *</label>
+            <input type="number" step="any" min="0.001" id="edit-buy-qty" required class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-emerald-500">
+          </div>
+          <div>
+            <label class="block font-semibold text-emerald-800 mb-0.5">ราคารวม (บ.) *</label>
+            <input type="number" step="any" min="0" id="edit-buy-total-price" class="w-full px-2.5 py-1.5 border border-emerald-300 bg-white font-bold text-emerald-700 rounded-lg text-xs font-mono focus:ring-2 focus:ring-emerald-500">
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-700 mb-0.5">ราคา/หน่วย (บ.)</label>
+            <input type="number" step="any" min="0" id="edit-buy-price" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-emerald-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">หมายเหตุ</label>
+          <input type="text" id="edit-buy-remark" placeholder="บันทึกข้อความเพิ่มเติม (ถ้ามี)" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-emerald-500">
+        </div>
+
+        <div class="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100 mt-2">
+          <button type="button" onclick="closeModal('buy-edit-modal')" class="px-4 py-2 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-100 transition">
+            ยกเลิก
+          </button>
+          <button type="submit" id="btn-save-edit-buy" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg text-xs shadow-sm transition flex items-center space-x-1.5">
+            <i class="fa-solid fa-floppy-disk"></i>
+            <span>บันทึกการแก้ไข</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 9.2 EDIT PAY MODAL -->
+  <div id="pay-edit-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop hidden">
+    <div class="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden animate-fade-in border border-slate-100 max-h-[90vh] flex flex-col">
+      <div class="p-5 border-b border-slate-100 flex items-center justify-between bg-teal-50/70 flex-shrink-0">
+        <h3 class="font-bold text-slate-800 flex items-center space-x-2">
+          <i class="fa-solid fa-pen-to-square text-teal-600"></i>
+          <span>แก้ไขรายการเบิกจ่ายพัสดุ</span>
+        </h3>
+        <button type="button" onclick="closeModal('pay-edit-modal')" class="modal-close-btn text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+
+      <form id="form-edit-pay-modal" class="p-6 space-y-3.5 overflow-y-auto flex-1 text-xs">
+        <input type="hidden" id="edit-pay-id">
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">วันที่เบิกจ่าย *</label>
+            <input type="date" id="edit-pay-doc-date" required class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-teal-500">
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-700 mb-1">เลขที่ใบเบิก *</label>
+            <input type="text" id="edit-pay-doc-no" required class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-teal-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">แผนก / หน่วยงานที่เบิก *</label>
+          <input type="text" id="edit-pay-department" list="hospital-departments" required class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-teal-500">
+        </div>
+
+        <div class="p-3 bg-teal-50/50 rounded-lg border border-teal-100 space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="font-bold text-teal-950">รายการพัสดุ</span>
+            <span id="edit-pay-unit-badge" class="font-mono text-teal-800 bg-teal-100 px-2 py-0.5 rounded text-[11px]">หน่วย: -</span>
+          </div>
+          <select id="edit-pay-item-code" required class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-teal-500 bg-white">
+          </select>
+        </div>
+
+        <!-- Two-Way Price and Quantity Calculation -->
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="block font-semibold text-slate-700 mb-0.5">จำนวนเบิก *</label>
+            <input type="number" step="any" min="0.001" id="edit-pay-qty" required class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-teal-500">
+          </div>
+          <div>
+            <label class="block font-semibold text-slate-700 mb-0.5">ราคา/หน่วย (บ.)</label>
+            <input type="number" step="any" min="0" id="edit-pay-price" class="w-full px-2.5 py-1.5 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-teal-500">
+          </div>
+          <div>
+            <label class="block font-semibold text-teal-800 mb-0.5">ราคารวม (บ.)</label>
+            <input type="number" step="any" min="0" id="edit-pay-total-price" class="w-full px-2.5 py-1.5 border border-teal-300 bg-white font-bold text-teal-700 rounded-lg text-xs font-mono focus:ring-2 focus:ring-teal-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-semibold text-slate-700 mb-1">หมายเหตุการเบิก</label>
+          <input type="text" id="edit-pay-remark" placeholder="หมายเหตุเพิ่มเติม" class="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-teal-500">
+        </div>
+
+        <div class="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100 mt-2">
+          <button type="button" onclick="closeModal('pay-edit-modal')" class="px-4 py-2 border border-slate-300 rounded-lg text-xs font-medium text-slate-700 hover:bg-slate-100 transition">
+            ยกเลิก
+          </button>
+          <button type="submit" id="btn-save-edit-pay" class="px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-medium rounded-lg text-xs shadow-sm transition flex items-center space-x-1.5">
+            <i class="fa-solid fa-floppy-disk"></i>
+            <span>บันทึกการแก้ไข</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <!-- 10. EDIT USER MODAL (Superadmin) -->
   <div id="user-edit-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-backdrop hidden">
     <div class="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden animate-fade-in border border-slate-100">
@@ -2181,6 +2353,6 @@
   <div id="toast-container" class="fixed bottom-5 right-5 z-50 space-y-2 pointer-events-none"></div>
 
   <!-- App Application Script -->
-  <script src="app.js?v=2.5"></script>
+  <script src="app.js?v=2.6"></script>
 </body>
 </html>

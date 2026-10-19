@@ -1026,6 +1026,141 @@ export default {
         }, 201);
       }
 
+      // 2.1 ดึง, แก้ไข, ลบ รายการรับเข้าพัสดุรายบรรทัด (GET, PUT, DELETE /api/buys/:id)
+      const buyIdMatch = path.match(/^\/api\/buys\/(\d+)$/);
+      if (buyIdMatch && method === "GET") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+        const canView = await checkPermission(db, authUser.userId, authUser.role, "buy", false);
+        if (!canView) return errorJson("ไม่มีสิทธิเข้าถึงข้อมูลรับเข้าพัสดุ", 403);
+
+        const buyId = parseInt(buyIdMatch[1], 10);
+        const buy = await db.prepare("SELECT * FROM buys WHERE id = ?").bind(buyId).first();
+        if (!buy) return errorJson("ไม่พบรายการรับเข้าพัสดุ", 404);
+        return json({ success: true, buy });
+      }
+
+      if (buyIdMatch && method === "PUT") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "buy", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิแก้ไขข้อมูลรับเข้าพัสดุ (ต้องมีสิทธิ can_edit ในหน้า buy)", 403);
+
+        const buyId = parseInt(buyIdMatch[1], 10);
+        const existing = await db.prepare("SELECT * FROM buys WHERE id = ?").bind(buyId).first();
+        if (!existing) return errorJson("ไม่พบรายการรับเข้าพัสดุ", 404);
+
+        const b = await request.json().catch(() => ({}));
+        const doc_date = (b.doc_date || existing.doc_date).trim();
+        const doc_no = (b.doc_no || existing.doc_no).trim();
+        const shop_name = (b.shop_name || existing.shop_name).trim();
+        const item_code = (b.item_code || existing.item_code).trim();
+        const quantity = parseFloat(b.quantity !== undefined ? b.quantity : existing.quantity) || 0;
+        let price_per_unit = parseFloat(b.price_per_unit !== undefined ? b.price_per_unit : existing.price_per_unit);
+        let total_price = parseFloat(b.total_price !== undefined ? b.total_price : existing.total_price);
+        const remark = (b.remark !== undefined ? b.remark : (existing.remark || "")).trim();
+
+        if (quantity <= 0) {
+          return errorJson("จำนวนต้องมากกว่า 0", 400);
+        }
+
+        if (!isNaN(total_price) && total_price >= 0 && (isNaN(price_per_unit) || price_per_unit <= 0)) {
+          total_price = Math.round(total_price * 100) / 100;
+          price_per_unit = Math.round((total_price / quantity) * 10000) / 10000;
+        } else if (!isNaN(price_per_unit) && price_per_unit >= 0) {
+          if (isNaN(total_price) || total_price <= 0) {
+            total_price = Math.round(quantity * price_per_unit * 100) / 100;
+          } else {
+            total_price = Math.round(total_price * 100) / 100;
+          }
+        } else {
+          price_per_unit = 0;
+          total_price = 0;
+        }
+
+        const itemRecord = await db.prepare(
+          "SELECT item_name, category, unit FROM items WHERE item_code = ?"
+        ).bind(item_code).first();
+        if (!itemRecord) {
+          return errorJson(`ไม่พบรหัสพัสดุ "${item_code}" ในทะเบียนพัสดุ`, 404);
+        }
+
+        // ตรวจสอบความปลอดภัยของสต๊อก: ป้องกันสต๊อกติดลบจากการแก้ไขยอดรับเข้า
+        if (item_code === existing.item_code) {
+          const bal = await db.prepare(
+            "SELECT balance_qty FROM item_balances WHERE item_code = ?"
+          ).bind(item_code).first();
+          const currentBal = bal ? Number(bal.balance_qty) : 0;
+          const netChange = quantity - Number(existing.quantity);
+          if (currentBal + netChange < -0.001) {
+            return errorJson(`ไม่สามารถปรับลดจำนวนรับเข้าได้ เนื่องจากคงเหลือปัจจุบันมีเพียง ${currentBal} ${existing.unit} การปรับลดลง ${Math.abs(netChange).toFixed(2)} ${existing.unit} จะทำให้สต๊อกติดลบ`, 400);
+          }
+        } else {
+          const oldBal = await db.prepare(
+            "SELECT balance_qty FROM item_balances WHERE item_code = ?"
+          ).bind(existing.item_code).first();
+          const oldCurrentBal = oldBal ? Number(oldBal.balance_qty) : 0;
+          if (oldCurrentBal - Number(existing.quantity) < -0.001) {
+            return errorJson(`ไม่สามารถเปลี่ยนรหัสพัสดุได้ เนื่องจากจะทำให้สต๊อกเดิมของ "${existing.item_name}" (${existing.item_code}) ติดลบ`, 400);
+          }
+        }
+
+        const ym_period = doc_date.slice(0, 7);
+        await db.prepare(`
+          UPDATE buys SET
+            doc_date = ?, doc_no = ?, item_code = ?, item_name = ?,
+            category = ?, unit = ?, price_per_unit = ?, quantity = ?,
+            total_price = ?, shop_name = ?, remark = ?, ym_period = ?
+          WHERE id = ?
+        `).bind(
+          doc_date, doc_no, item_code, itemRecord.item_name,
+          itemRecord.category, itemRecord.unit, price_per_unit, quantity,
+          total_price, shop_name, remark, ym_period, buyId
+        ).run();
+
+        await recalculateSingleItemBalance(db, existing.item_code);
+        if (item_code !== existing.item_code) {
+          await recalculateSingleItemBalance(db, item_code);
+        }
+        invalidateStockCache();
+
+        return json({
+          success: true,
+          message: `แก้ไขรายการรับเข้าพัสดุ "${doc_no}" (${item_code}) เรียบร้อยแล้ว`,
+          buy_id: buyId
+        });
+      }
+
+      if (buyIdMatch && method === "DELETE") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "buy", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิลบข้อมูลรับเข้าพัสดุ (ต้องมีสิทธิ can_edit ในหน้า buy)", 403);
+
+        const buyId = parseInt(buyIdMatch[1], 10);
+        const existing = await db.prepare("SELECT * FROM buys WHERE id = ?").bind(buyId).first();
+        if (!existing) return errorJson("ไม่พบรายการรับเข้าพัสดุ", 404);
+
+        // ตรวจสอบว่าถ้าลบรายการรับเข้านี้แล้ว สต๊อกคงเหลือจะติดลบหรือไม่
+        const bal = await db.prepare(
+          "SELECT balance_qty FROM item_balances WHERE item_code = ?"
+        ).bind(existing.item_code).first();
+        const currentBal = bal ? Number(bal.balance_qty) : 0;
+        if (currentBal - Number(existing.quantity) < -0.001) {
+          return errorJson(`ไม่สามารถลบรายการรับเข้านี้ได้ เนื่องจากจะทำให้สต๊อกของ "${existing.item_name}" (${existing.item_code}) ติดลบ (คงเหลือปัจจุบัน ${currentBal} ${existing.unit}, รายการนี้รับเข้า ${existing.quantity} ${existing.unit})`, 400);
+        }
+
+        await db.prepare("DELETE FROM buys WHERE id = ?").bind(buyId).run();
+        await recalculateSingleItemBalance(db, existing.item_code);
+        invalidateStockCache();
+
+        return json({
+          success: true,
+          message: `ลบรายการรับเข้าพัสดุ "${existing.doc_no}" (${existing.item_code}) เรียบร้อยแล้ว`,
+          buy_id: buyId
+        });
+      }
+
       // 3. ดึงรายการเบิกจ่ายพัสดุ (GET /api/pays?q=...&page=...&limit=...)
       if (path === "/api/pays" && method === "GET") {
         const authUser = await authenticate(request, env);
@@ -1203,6 +1338,149 @@ export default {
           items_count: validatedItems.length,
           items: validatedItems
         }, 201);
+      }
+
+      // 4.1 ดึง, แก้ไข, ลบ รายการเบิกจ่ายพัสดุรายบรรทัด (GET, PUT, DELETE /api/pays/:id)
+      const payIdMatch = path.match(/^\/api\/pays\/(\d+)$/);
+      if (payIdMatch && method === "GET") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+        const canView = await checkPermission(db, authUser.userId, authUser.role, "pay", false);
+        if (!canView) return errorJson("ไม่มีสิทธิเข้าถึงข้อมูลเบิกจ่ายพัสดุ", 403);
+
+        const payId = parseInt(payIdMatch[1], 10);
+        const pay = await db.prepare("SELECT * FROM pays WHERE id = ?").bind(payId).first();
+        if (!pay) return errorJson("ไม่พบรายการเบิกจ่ายพัสดุ", 404);
+        return json({ success: true, pay });
+      }
+
+      if (payIdMatch && method === "PUT") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "pay", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิแก้ไขข้อมูลเบิกจ่ายพัสดุ (ต้องมีสิทธิ can_edit ในหน้า pay)", 403);
+
+        const payId = parseInt(payIdMatch[1], 10);
+        const existing = await db.prepare("SELECT * FROM pays WHERE id = ?").bind(payId).first();
+        if (!existing) return errorJson("ไม่พบรายการเบิกจ่ายพัสดุ", 404);
+
+        const b = await request.json().catch(() => ({}));
+        const doc_date = (b.doc_date || existing.doc_date).trim();
+        const doc_no = (b.doc_no || existing.doc_no).trim();
+        const department = (b.department || existing.department).trim();
+        const item_code = (b.item_code || existing.item_code).trim();
+        const quantity = parseFloat(b.quantity !== undefined ? b.quantity : existing.quantity) || 0;
+        let price_per_unit = parseFloat(b.price_per_unit !== undefined ? b.price_per_unit : existing.price_per_unit);
+        let total_price = parseFloat(b.total_price !== undefined ? b.total_price : existing.total_price);
+        const remark = (b.remark !== undefined ? b.remark : (existing.remark || "")).trim();
+
+        if (quantity <= 0) {
+          return errorJson("จำนวนเบิกต้องมากกว่า 0", 400);
+        }
+
+        const stockRecord = await db.prepare(`
+          SELECT 
+            i.item_name, i.category, i.unit,
+            COALESCE(b.balance_qty, 0) AS balance_qty,
+            COALESCE(b.avg_unit_price, 0) AS avg_unit_price
+          FROM items i
+          LEFT JOIN item_balances b ON i.item_code = b.item_code
+          WHERE i.item_code = ?
+        `).bind(item_code).first();
+        if (!stockRecord) {
+          return errorJson(`ไม่พบรหัสพัสดุ "${item_code}" ในคลังพัสดุ`, 404);
+        }
+
+        // ตรวจสอบสต๊อกคงเหลือจริงก่อนแก้ไข
+        const currentBal = Number(stockRecord.balance_qty) || 0;
+        if (item_code === existing.item_code) {
+          const availableToDisburse = currentBal + Number(existing.quantity);
+          if (quantity > availableToDisburse + 0.001) {
+            return json({
+              success: false,
+              error: "INSUFFICIENT_STOCK",
+              message: `ยอดคงเหลือไม่เพียงพอสำหรับรายการ "${stockRecord.item_name}" (${item_code})! มีคงเหลือในคลังเพียง ${availableToDisburse} ${stockRecord.unit} (ขอเบิก ${quantity} ${stockRecord.unit}) ไม่อนุญาตให้สต๊อกติดลบ`,
+              item_code,
+              item_name: stockRecord.item_name,
+              available_qty: availableToDisburse,
+              requested_qty: quantity,
+              unit: stockRecord.unit
+            }, 400);
+          }
+        } else {
+          if (quantity > currentBal + 0.001) {
+            return json({
+              success: false,
+              error: "INSUFFICIENT_STOCK",
+              message: `ยอดคงเหลือไม่เพียงพอสำหรับรายการ "${stockRecord.item_name}" (${item_code})! มีคงเหลือในคลังเพียง ${currentBal} ${stockRecord.unit} (ขอเบิก ${quantity} ${stockRecord.unit})`,
+              item_code,
+              item_name: stockRecord.item_name,
+              available_qty: currentBal,
+              requested_qty: quantity,
+              unit: stockRecord.unit
+            }, 400);
+          }
+        }
+
+        if (!isNaN(total_price) && total_price >= 0 && (isNaN(price_per_unit) || price_per_unit <= 0)) {
+          total_price = Math.round(total_price * 100) / 100;
+          price_per_unit = Math.round((total_price / quantity) * 10000) / 10000;
+        } else if (!isNaN(price_per_unit) && price_per_unit > 0) {
+          if (isNaN(total_price) || total_price <= 0) {
+            total_price = Math.round(quantity * price_per_unit * 100) / 100;
+          } else {
+            total_price = Math.round(total_price * 100) / 100;
+          }
+        } else {
+          price_per_unit = Number(stockRecord.avg_unit_price) || 0;
+          total_price = Math.round(quantity * price_per_unit * 100) / 100;
+        }
+
+        const ym_period = doc_date.slice(0, 7);
+        await db.prepare(`
+          UPDATE pays SET
+            doc_date = ?, doc_no = ?, item_code = ?, item_name = ?,
+            category = ?, unit = ?, price_per_unit = ?, quantity = ?,
+            total_price = ?, department = ?, remark = ?, ym_period = ?
+          WHERE id = ?
+        `).bind(
+          doc_date, doc_no, item_code, stockRecord.item_name,
+          stockRecord.category, stockRecord.unit, price_per_unit, quantity,
+          total_price, department, remark, ym_period, payId
+        ).run();
+
+        await recalculateSingleItemBalance(db, existing.item_code);
+        if (item_code !== existing.item_code) {
+          await recalculateSingleItemBalance(db, item_code);
+        }
+        invalidateStockCache();
+
+        return json({
+          success: true,
+          message: `แก้ไขรายการเบิกจ่ายพัสดุ "${doc_no}" (${item_code}) เรียบร้อยแล้ว`,
+          pay_id: payId
+        });
+      }
+
+      if (payIdMatch && method === "DELETE") {
+        const authUser = await authenticate(request, env);
+        if (!authUser) return errorJson("กรุณาเข้าสู่ระบบ", 401);
+        const canEdit = await checkPermission(db, authUser.userId, authUser.role, "pay", true);
+        if (!canEdit) return errorJson("ไม่มีสิทธิลบข้อมูลเบิกจ่ายพัสดุ (ต้องมีสิทธิ can_edit ในหน้า pay)", 403);
+
+        const payId = parseInt(payIdMatch[1], 10);
+        const existing = await db.prepare("SELECT * FROM pays WHERE id = ?").bind(payId).first();
+        if (!existing) return errorJson("ไม่พบรายการเบิกจ่ายพัสดุ", 404);
+
+        await db.prepare("DELETE FROM pays WHERE id = ?").bind(payId).run();
+        await recalculateSingleItemBalance(db, existing.item_code);
+        invalidateStockCache();
+
+        return json({
+          success: true,
+          message: `ลบรายการเบิกจ่ายพัสดุ "${existing.doc_no}" (${existing.item_code}) เรียบร้อยแล้ว (คืนยอดสต๊อกเข้าคลังเรียบร้อย)`,
+          pay_id: payId
+        });
       }
 
       // ----------------------------------------------------------------------

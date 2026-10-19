@@ -1379,6 +1379,8 @@ function clearBuyItemInputs() {
   document.getElementById('buy-qty').value = '';
   document.getElementById('buy-price').value = '';
   document.getElementById('buy-total-price').value = '';
+  const itemRemark = document.getElementById('buy-item-remark');
+  if (itemRemark) itemRemark.value = '';
   const alertBox = document.getElementById('buy-stock-alert-box') || document.getElementById('buy-item-info');
   if (alertBox) alertBox.classList.add('hidden');
   document.getElementById('buy-item-suggestions').classList.add('hidden');
@@ -1405,7 +1407,8 @@ function renderBuyCart() {
     return `
       <tr class="hover:bg-slate-50 border-b border-slate-100">
         <td class="p-1.5 font-medium text-slate-800">
-          <span class="font-mono text-emerald-700 font-bold">${item.item_code}</span>: ${item.item_name}
+          <div><span class="font-mono text-emerald-700 font-bold">${item.item_code}</span>: ${item.item_name}</div>
+          ${item.remark ? `<div class="text-[10px] text-slate-400 italic font-normal mt-0.5"><i class="fa-solid fa-comment-dots mr-1"></i>${escapeHtml(item.remark)}</div>` : ''}
         </td>
         <td class="p-1.5 text-right font-mono text-slate-700">${Number(item.quantity).toLocaleString()} ${item.unit}</td>
         <td class="p-1.5 text-right font-mono font-bold text-slate-900">${Number(item.total_price).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
@@ -1427,6 +1430,7 @@ function addBuyItemToCart() {
   const qty = parseFloat(document.getElementById('buy-qty').value) || 0;
   let price = parseFloat(document.getElementById('buy-price').value) || 0;
   let total = parseFloat(document.getElementById('buy-total-price').value) || 0;
+  const itemRemark = (document.getElementById('buy-item-remark')?.value || '').trim();
 
   if (!itemCode) {
     showToast('กรุณาเลือกรายการพัสดุก่อนเพิ่มลงในบิล', 'warning');
@@ -1456,7 +1460,8 @@ function addBuyItemToCart() {
     unit: stock ? stock.unit : 'หน่วย',
     quantity: qty,
     price_per_unit: price,
-    total_price: total
+    total_price: total,
+    remark: itemRemark
   });
 
   clearBuyItemInputs();
@@ -1469,13 +1474,41 @@ function removeBuyCartItem(index) {
   renderBuyCart();
 }
 
+function toggleBuysHistory(show = null) {
+  const historyCard = document.getElementById('buy-history-card');
+  const formCard = document.getElementById('buy-form-card');
+  const btnShow = document.getElementById('btn-show-buys-history');
+  const icon = document.getElementById('icon-toggle-buys');
+  const text = document.getElementById('text-toggle-buys');
+  if (!historyCard || !formCard) return;
+
+  const isCurrentlyHidden = historyCard.classList.contains('hidden');
+  const shouldShow = show !== null ? show : isCurrentlyHidden;
+
+  if (shouldShow) {
+    historyCard.classList.remove('hidden');
+    formCard.classList.remove('lg:col-span-12');
+    formCard.classList.add('lg:col-span-5');
+    if (btnShow) btnShow.classList.add('hidden');
+    if (icon) icon.className = 'fa-solid fa-eye-slash';
+    if (text) text.textContent = 'ซ่อนประวัติ';
+  } else {
+    historyCard.classList.add('hidden');
+    formCard.classList.remove('lg:col-span-5');
+    formCard.classList.add('lg:col-span-12');
+    if (btnShow) btnShow.classList.remove('hidden');
+    if (icon) icon.className = 'fa-solid fa-eye';
+    if (text) text.textContent = 'แสดงประวัติ';
+  }
+}
+
 async function loadRecentBuys(page = 1) {
   state.buysPagination.page = page;
   const pageSize = parseInt(document.getElementById('buys-page-size')?.value || '15', 10);
   const search = document.getElementById('buys-history-search')?.value.trim() || '';
 
   const tbody = document.getElementById('recent-buys-table-body');
-  tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-1"></i> กำลังโหลดประวัติ...</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="8" class="text-center py-6 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-1"></i> กำลังโหลดประวัติ...</td></tr>`;
 
   const query = new URLSearchParams();
   query.append('page', page);
@@ -1484,7 +1517,7 @@ async function loadRecentBuys(page = 1) {
 
   const res = await apiRequest(`/api/buys?${query.toString()}`);
   if (!res.ok || !res.data.buys) {
-    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400">ยังไม่มีประวัติการรับเข้า</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-6 text-slate-400">ยังไม่มีประวัติการรับเข้า</td></tr>`;
     return;
   }
 
@@ -1501,23 +1534,144 @@ async function loadRecentBuys(page = 1) {
   document.getElementById('buys-next-page').disabled = page >= total_pages;
 
   if (buys.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400">ไม่พบประวัติการรับเข้า</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-6 text-slate-400">ไม่พบประวัติการรับเข้า</td></tr>`;
     return;
   }
+
+  const canEdit = state.currentUser?.role === 'superadmin' || state.currentUser?.role === 'admin' || state.userPermissions['buy']?.can_edit === 1;
 
   tbody.innerHTML = buys.map(b => `
     <tr class="hover:bg-slate-50 border-b border-slate-100">
       <td class="py-2.5 px-3 font-mono">${b.doc_date}</td>
-      <td class="py-2.5 px-3 font-mono font-medium text-slate-800">${b.doc_no}</td>
+      <td class="py-2.5 px-3 font-mono font-medium text-slate-800">${escapeHtml(b.doc_no)}</td>
       <td class="py-2.5 px-3">
-        <span class="font-bold text-slate-800">${b.item_code}</span>: ${b.item_name}
+        <div><span class="font-bold text-slate-800">${escapeHtml(b.item_code)}</span>: ${escapeHtml(b.item_name)}</div>
+        ${b.remark ? `<div class="text-[10px] text-slate-400 italic">${formatExpandableCell(b.remark)}</div>` : ''}
       </td>
-      <td class="py-2.5 px-3 text-right font-mono font-semibold text-emerald-700">+${Number(b.quantity).toLocaleString()} ${b.unit}</td>
+      <td class="py-2.5 px-3 text-right font-mono font-semibold text-emerald-700">+${Number(b.quantity).toLocaleString()} ${escapeHtml(b.unit)}</td>
       <td class="py-2.5 px-3 text-right font-mono text-slate-600">${Number(b.price_per_unit).toFixed(2)}</td>
       <td class="py-2.5 px-3 text-right font-mono font-bold text-slate-900">${Number(b.total_price).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
       <td class="py-2.5 px-3 text-slate-700">${formatExpandableCell(b.shop_name)}</td>
+      <td class="py-2.5 px-2 text-center">
+        ${canEdit ? `
+          <div class="flex items-center justify-center space-x-1">
+            <button type="button" onclick="openEditBuyModal(${b.id})" class="text-amber-600 hover:text-amber-800 p-1.5 rounded hover:bg-amber-50 transition" title="แก้ไขรายการ">
+              <i class="fa-solid fa-pen-to-square"></i>
+            </button>
+            <button type="button" onclick="confirmDeleteBuy(${b.id}, '${escapeHtml(b.item_code)}', '${escapeHtml(b.item_name)}', '${escapeHtml(b.doc_no)}', ${b.quantity})" class="text-rose-600 hover:text-rose-800 p-1.5 rounded hover:bg-rose-50 transition" title="ลบรายการ">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </div>
+        ` : `<span class="text-slate-400 text-[11px]">-</span>`}
+      </td>
     </tr>
   `).join('');
+}
+
+async function openEditBuyModal(buyId) {
+  let buy = (state.recentBuys || []).find(b => b.id === buyId);
+  if (!buy) {
+    const res = await apiRequest(`/api/buys/${buyId}`);
+    if (res.ok && res.data.buy) {
+      buy = res.data.buy;
+    } else {
+      showToast('ไม่พบข้อมูลรายการรับเข้าพัสดุ', 'error');
+      return;
+    }
+  }
+
+  // Populate shops dropdown
+  const shopSelect = document.getElementById('edit-buy-shop-name');
+  if (shopSelect && state.shops) {
+    shopSelect.innerHTML = state.shops.map(s => 
+      `<option value="${escapeHtml(s.shop_name)}" ${s.shop_name === buy.shop_name ? 'selected' : ''}>${escapeHtml(s.shop_name)}</option>`
+    ).join('');
+    if (!state.shops.some(s => s.shop_name === buy.shop_name)) {
+      shopSelect.innerHTML = `<option value="${escapeHtml(buy.shop_name)}" selected>${escapeHtml(buy.shop_name)}</option>` + shopSelect.innerHTML;
+    }
+  }
+
+  // Populate items dropdown
+  const itemSelect = document.getElementById('edit-buy-item-code');
+  if (itemSelect && state.stockItems) {
+    itemSelect.innerHTML = state.stockItems.map(i => 
+      `<option value="${escapeHtml(i.item_code)}" data-unit="${escapeHtml(i.unit)}" ${i.item_code === buy.item_code ? 'selected' : ''}>${escapeHtml(i.item_code)} : ${escapeHtml(i.item_name)}</option>`
+    ).join('');
+    if (!state.stockItems.some(i => i.item_code === buy.item_code)) {
+      itemSelect.innerHTML = `<option value="${escapeHtml(buy.item_code)}" data-unit="${escapeHtml(buy.unit)}" selected>${escapeHtml(buy.item_code)} : ${escapeHtml(buy.item_name)}</option>` + itemSelect.innerHTML;
+    }
+  }
+
+  document.getElementById('edit-buy-id').value = buy.id;
+  document.getElementById('edit-buy-doc-date').value = buy.doc_date;
+  document.getElementById('edit-buy-doc-no').value = buy.doc_no;
+  document.getElementById('edit-buy-qty').value = buy.quantity;
+  document.getElementById('edit-buy-price').value = Number(buy.price_per_unit).toFixed(4);
+  document.getElementById('edit-buy-total-price').value = Number(buy.total_price).toFixed(2);
+  document.getElementById('edit-buy-remark').value = buy.remark || '';
+  document.getElementById('edit-buy-unit-badge').textContent = `หน่วย: ${buy.unit}`;
+
+  // Update unit badge on item change
+  if (itemSelect) {
+    itemSelect.onchange = () => {
+      const selectedOpt = itemSelect.options[itemSelect.selectedIndex];
+      const unit = selectedOpt ? selectedOpt.getAttribute('data-unit') : '-';
+      document.getElementById('edit-buy-unit-badge').textContent = `หน่วย: ${unit}`;
+    };
+  }
+
+  // Wire price & total inputs in edit modal
+  const editQty = document.getElementById('edit-buy-qty');
+  const editPrice = document.getElementById('edit-buy-price');
+  const editTotal = document.getElementById('edit-buy-total-price');
+
+  if (editQty && editPrice && editTotal) {
+    editQty.oninput = () => {
+      const q = parseFloat(editQty.value) || 0;
+      const t = parseFloat(editTotal.value) || 0;
+      const p = parseFloat(editPrice.value) || 0;
+      if (q > 0) {
+        if (t > 0) {
+          editPrice.value = (Math.round((t / q) * 10000) / 10000).toFixed(4);
+        } else if (p > 0) {
+          editTotal.value = (Math.round(q * p * 100) / 100).toFixed(2);
+        }
+      }
+    };
+
+    editTotal.oninput = () => {
+      const q = parseFloat(editQty.value) || 0;
+      const t = parseFloat(editTotal.value) || 0;
+      if (q > 0 && t >= 0) {
+        editPrice.value = (Math.round((t / q) * 10000) / 10000).toFixed(4);
+      }
+    };
+
+    editPrice.oninput = () => {
+      const q = parseFloat(editQty.value) || 0;
+      const p = parseFloat(editPrice.value) || 0;
+      if (q > 0 && p >= 0) {
+        editTotal.value = (Math.round(q * p * 100) / 100).toFixed(2);
+      }
+    };
+  }
+
+  openModal('buy-edit-modal');
+}
+
+async function confirmDeleteBuy(buyId, itemCode, itemName, docNo, qty) {
+  if (!confirm(`ยืนยันการลบรายการรับเข้าพัสดุ?\n\nเลขที่เอกสาร: ${docNo}\nรหัสพัสดุ: ${itemCode} (${itemName})\nจำนวนรับเข้า: ${qty}\n\n*หมายเหตุ: จะลบได้ต่อเมื่อสต๊อกคงเหลือไม่ติดลบ`)) {
+    return;
+  }
+
+  const res = await apiRequest(`/api/buys/${buyId}`, 'DELETE');
+  if (res.ok && res.data.success) {
+    showToast(res.data.message || 'ลบรายการรับเข้าพัสดุเรียบร้อยแล้ว', 'success');
+    loadRecentBuys(state.buysPagination.page);
+    loadStockBalance(true);
+  } else {
+    showToast(res.data.message || 'ไม่สามารถลบรายการได้', 'error');
+  }
 }
 
 // ============================================================================
@@ -1598,8 +1752,13 @@ function selectPayItem(itemCode) {
   document.getElementById('pay-current-min-stock').textContent = item.min_stock;
 
   // Set default price from average price
-  if (item.avg_unit_price) {
-    document.getElementById('pay-price').value = item.avg_unit_price;
+  const avgPrice = Number(item.avg_unit_price || 0);
+  document.getElementById('pay-price').value = avgPrice.toFixed(2);
+  const qtyVal = parseFloat(document.getElementById('pay-qty').value) || 0;
+  if (qtyVal > 0) {
+    document.getElementById('pay-total-price').value = (Math.round(qtyVal * avgPrice * 100) / 100).toFixed(2);
+  } else {
+    document.getElementById('pay-total-price').value = '';
   }
 
   validatePayQuantity();
@@ -1857,13 +2016,41 @@ function confirmPullBuyBill() {
   showToast(`ดึงรายการจากบิล ${bill.doc_no} เข้าสู่ใบเบิกแล้ว (${addedCount} รายการ)`, 'success');
 }
 
+function togglePaysHistory(show = null) {
+  const historyCard = document.getElementById('pay-history-card');
+  const formCard = document.getElementById('pay-form-card');
+  const btnShow = document.getElementById('btn-show-pays-history');
+  const icon = document.getElementById('icon-toggle-pays');
+  const text = document.getElementById('text-toggle-pays');
+  if (!historyCard || !formCard) return;
+
+  const isCurrentlyHidden = historyCard.classList.contains('hidden');
+  const shouldShow = show !== null ? show : isCurrentlyHidden;
+
+  if (shouldShow) {
+    historyCard.classList.remove('hidden');
+    formCard.classList.remove('lg:col-span-12');
+    formCard.classList.add('lg:col-span-5');
+    if (btnShow) btnShow.classList.add('hidden');
+    if (icon) icon.className = 'fa-solid fa-eye-slash';
+    if (text) text.textContent = 'ซ่อนประวัติ';
+  } else {
+    historyCard.classList.add('hidden');
+    formCard.classList.remove('lg:col-span-5');
+    formCard.classList.add('lg:col-span-12');
+    if (btnShow) btnShow.classList.remove('hidden');
+    if (icon) icon.className = 'fa-solid fa-eye';
+    if (text) text.textContent = 'แสดงประวัติ';
+  }
+}
+
 async function loadRecentPays(page = 1) {
   state.paysPagination.page = page;
   const pageSize = parseInt(document.getElementById('pays-page-size')?.value || '15', 10);
   const search = document.getElementById('pays-history-search')?.value.trim() || '';
 
   const tbody = document.getElementById('recent-pays-table-body');
-  tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-1"></i> กำลังโหลดประวัติ...</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="8" class="text-center py-6 text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-1"></i> กำลังโหลดประวัติ...</td></tr>`;
 
   const query = new URLSearchParams();
   query.append('page', page);
@@ -1872,7 +2059,7 @@ async function loadRecentPays(page = 1) {
 
   const res = await apiRequest(`/api/pays?${query.toString()}`);
   if (!res.ok || !res.data.pays) {
-    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400">ยังไม่มีประวัติการเบิกจ่าย</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-6 text-slate-400">ยังไม่มีประวัติการเบิกจ่าย</td></tr>`;
     return;
   }
 
@@ -1889,23 +2076,140 @@ async function loadRecentPays(page = 1) {
   document.getElementById('pays-next-page').disabled = page >= total_pages;
 
   if (pays.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400">ไม่พบประวัติการเบิกจ่าย</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="text-center py-6 text-slate-400">ไม่พบประวัติการเบิกจ่าย</td></tr>`;
     return;
   }
+
+  const canEdit = state.currentUser?.role === 'superadmin' || state.currentUser?.role === 'admin' || state.userPermissions['pay']?.can_edit === 1;
 
   tbody.innerHTML = pays.map(p => `
     <tr class="hover:bg-slate-50 border-b border-slate-100">
       <td class="py-2.5 px-3 font-mono">${p.doc_date}</td>
-      <td class="py-2.5 px-3 font-mono font-medium text-slate-800">${p.doc_no}</td>
+      <td class="py-2.5 px-3 font-mono font-medium text-slate-800">${escapeHtml(p.doc_no)}</td>
       <td class="py-2.5 px-3">
-        <span class="font-bold text-slate-800">${p.item_code}</span>: ${p.item_name}
+        <div><span class="font-bold text-slate-800">${escapeHtml(p.item_code)}</span>: ${escapeHtml(p.item_name)}</div>
+        ${p.remark ? `<div class="text-[10px] text-slate-400 italic">${formatExpandableCell(p.remark)}</div>` : ''}
       </td>
-      <td class="py-2.5 px-3 text-right font-mono font-semibold text-rose-700">-${Number(p.quantity).toLocaleString()} ${p.unit}</td>
+      <td class="py-2.5 px-3 text-right font-mono font-semibold text-rose-700">-${Number(p.quantity).toLocaleString()} ${escapeHtml(p.unit)}</td>
       <td class="py-2.5 px-3 text-right font-mono text-slate-600">${Number(p.price_per_unit).toFixed(2)}</td>
       <td class="py-2.5 px-3 text-right font-mono font-bold text-slate-900">${Number(p.total_price).toLocaleString('th-TH', { minimumFractionDigits: 2 })}</td>
       <td class="py-2.5 px-3 text-slate-700 font-medium">${formatExpandableCell(p.department)}</td>
+      <td class="py-2.5 px-2 text-center">
+        ${canEdit ? `
+          <div class="flex items-center justify-center space-x-1">
+            <button type="button" onclick="openEditPayModal(${p.id})" class="text-amber-600 hover:text-amber-800 p-1.5 rounded hover:bg-amber-50 transition" title="แก้ไขรายการ">
+              <i class="fa-solid fa-pen-to-square"></i>
+            </button>
+            <button type="button" onclick="confirmDeletePay(${p.id}, '${escapeHtml(p.item_code)}', '${escapeHtml(p.item_name)}', '${escapeHtml(p.doc_no)}', ${p.quantity})" class="text-rose-600 hover:text-rose-800 p-1.5 rounded hover:bg-rose-50 transition" title="ลบรายการ">
+              <i class="fa-solid fa-trash-can"></i>
+            </button>
+          </div>
+        ` : `<span class="text-slate-400 text-[11px]">-</span>`}
+      </td>
     </tr>
   `).join('');
+}
+
+async function openEditPayModal(payId) {
+  let pay = (state.recentPays || []).find(p => p.id === payId);
+  if (!pay) {
+    const res = await apiRequest(`/api/pays/${payId}`);
+    if (res.ok && res.data.pay) {
+      pay = res.data.pay;
+    } else {
+      showToast('ไม่พบข้อมูลรายการเบิกจ่ายพัสดุ', 'error');
+      return;
+    }
+  }
+
+  // Populate items dropdown
+  const itemSelect = document.getElementById('edit-pay-item-code');
+  if (itemSelect && state.stockItems) {
+    itemSelect.innerHTML = state.stockItems.map(i => 
+      `<option value="${escapeHtml(i.item_code)}" data-unit="${escapeHtml(i.unit)}" data-price="${i.avg_unit_price || 0}" ${i.item_code === pay.item_code ? 'selected' : ''}>${escapeHtml(i.item_code)} : ${escapeHtml(i.item_name)}</option>`
+    ).join('');
+    if (!state.stockItems.some(i => i.item_code === pay.item_code)) {
+      itemSelect.innerHTML = `<option value="${escapeHtml(pay.item_code)}" data-unit="${escapeHtml(pay.unit)}" data-price="${pay.price_per_unit || 0}" selected>${escapeHtml(pay.item_code)} : ${escapeHtml(pay.item_name)}</option>` + itemSelect.innerHTML;
+    }
+  }
+
+  document.getElementById('edit-pay-id').value = pay.id;
+  document.getElementById('edit-pay-doc-date').value = pay.doc_date;
+  document.getElementById('edit-pay-doc-no').value = pay.doc_no;
+  document.getElementById('edit-pay-department').value = pay.department;
+  document.getElementById('edit-pay-qty').value = pay.quantity;
+  document.getElementById('edit-pay-price').value = Number(pay.price_per_unit).toFixed(2);
+  document.getElementById('edit-pay-total-price').value = Number(pay.total_price).toFixed(2);
+  document.getElementById('edit-pay-remark').value = pay.remark || '';
+  document.getElementById('edit-pay-unit-badge').textContent = `หน่วย: ${pay.unit}`;
+
+  // Update unit & default price badge on item change
+  if (itemSelect) {
+    itemSelect.onchange = () => {
+      const selectedOpt = itemSelect.options[itemSelect.selectedIndex];
+      const unit = selectedOpt ? selectedOpt.getAttribute('data-unit') : '-';
+      const defPrice = selectedOpt ? selectedOpt.getAttribute('data-price') : '0';
+      document.getElementById('edit-pay-unit-badge').textContent = `หน่วย: ${unit}`;
+      const editPrice = document.getElementById('edit-pay-price');
+      const editQty = document.getElementById('edit-pay-qty');
+      const editTotal = document.getElementById('edit-pay-total-price');
+      if (editPrice && defPrice) {
+        editPrice.value = Number(defPrice).toFixed(2);
+        const q = parseFloat(editQty?.value) || 0;
+        if (q > 0) {
+          editTotal.value = (Math.round(q * parseFloat(defPrice) * 100) / 100).toFixed(2);
+        }
+      }
+    };
+  }
+
+  // Wire price & total inputs in edit pay modal
+  const editQty = document.getElementById('edit-pay-qty');
+  const editPrice = document.getElementById('edit-pay-price');
+  const editTotal = document.getElementById('edit-pay-total-price');
+
+  if (editQty && editPrice && editTotal) {
+    editQty.oninput = () => {
+      const q = parseFloat(editQty.value) || 0;
+      const p = parseFloat(editPrice.value) || 0;
+      if (q > 0 && p >= 0) {
+        editTotal.value = (Math.round(q * p * 100) / 100).toFixed(2);
+      }
+    };
+
+    editPrice.oninput = () => {
+      const q = parseFloat(editQty.value) || 0;
+      const p = parseFloat(editPrice.value) || 0;
+      if (q > 0 && p >= 0) {
+        editTotal.value = (Math.round(q * p * 100) / 100).toFixed(2);
+      }
+    };
+
+    editTotal.oninput = () => {
+      const q = parseFloat(editQty.value) || 0;
+      const t = parseFloat(editTotal.value) || 0;
+      if (q > 0 && t >= 0) {
+        editPrice.value = (Math.round((t / q) * 10000) / 10000).toFixed(4);
+      }
+    };
+  }
+
+  openModal('pay-edit-modal');
+}
+
+async function confirmDeletePay(payId, itemCode, itemName, docNo, qty) {
+  if (!confirm(`ยืนยันการลบรายการเบิกจ่ายพัสดุ?\n\nเลขที่ใบเบิก: ${docNo}\nรหัสพัสดุ: ${itemCode} (${itemName})\nจำนวนที่เบิก: ${qty}\n\n*หมายเหตุ: เมื่อลบแล้ว พัสดุจำนวน ${qty} จะถูกคืนยอดกลับเข้าสู่สต๊อกคลัง`)) {
+    return;
+  }
+
+  const res = await apiRequest(`/api/pays/${payId}`, 'DELETE');
+  if (res.ok && res.data.success) {
+    showToast(res.data.message || 'ลบรายการเบิกจ่ายและคืนยอดเข้าคลังเรียบร้อยแล้ว', 'success');
+    loadRecentPays(state.paysPagination.page);
+    loadStockBalance(true);
+  } else {
+    showToast(res.data.message || 'ไม่สามารถลบรายการได้', 'error');
+  }
 }
 
 // ============================================================================
@@ -3124,9 +3428,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    buyQty.addEventListener('input', recalcBuyTotalFromUnit);
-    buyPrice.addEventListener('input', recalcBuyTotalFromUnit);
     buyTotalPrice.addEventListener('input', recalcBuyUnitFromTotal);
+    buyPrice.addEventListener('input', recalcBuyTotalFromUnit);
+    buyQty.addEventListener('input', () => {
+      const q = parseFloat(buyQty.value) || 0;
+      const t = parseFloat(buyTotalPrice.value) || 0;
+      const p = parseFloat(buyPrice.value) || 0;
+      if (q > 0) {
+        if (t > 0) {
+          buyPrice.value = (Math.round((t / q) * 10000) / 10000).toFixed(4);
+        } else if (p > 0) {
+          buyTotalPrice.value = (Math.round(q * p * 100) / 100).toFixed(2);
+        }
+      }
+    });
   }
 
   // Buy Cart Buttons
@@ -3135,6 +3450,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const btnBuyClearItem = document.getElementById('btn-buy-clear-item');
   if (btnBuyClearItem) btnBuyClearItem.addEventListener('click', clearBuyItemInputs);
+
+  // Buy History Toggle Buttons
+  const btnToggleBuys = document.getElementById('btn-toggle-buys-history');
+  if (btnToggleBuys) btnToggleBuys.addEventListener('click', () => toggleBuysHistory());
+
+  const btnShowBuys = document.getElementById('btn-show-buys-history');
+  if (btnShowBuys) btnShowBuys.addEventListener('click', () => toggleBuysHistory(true));
 
   // Buy History Search & Pagination
   const buysSearch = document.getElementById('buys-history-search');
@@ -3236,6 +3558,60 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  // Edit Buy Modal Form Submission
+  const formEditBuy = document.getElementById('form-edit-buy-modal');
+  if (formEditBuy) {
+    formEditBuy.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const buyId = document.getElementById('edit-buy-id').value;
+      const doc_date = document.getElementById('edit-buy-doc-date').value;
+      const doc_no = document.getElementById('edit-buy-doc-no').value.trim();
+      const shop_name = document.getElementById('edit-buy-shop-name').value;
+      const item_code = document.getElementById('edit-buy-item-code').value;
+      const quantity = parseFloat(document.getElementById('edit-buy-qty').value) || 0;
+      let price_per_unit = parseFloat(document.getElementById('edit-buy-price').value) || 0;
+      let total_price = parseFloat(document.getElementById('edit-buy-total-price').value) || 0;
+      const remark = document.getElementById('edit-buy-remark').value.trim();
+
+      if (total_price > 0 && price_per_unit === 0) {
+        price_per_unit = Math.round((total_price / quantity) * 10000) / 10000;
+      } else if (price_per_unit > 0 && total_price === 0) {
+        total_price = Math.round(quantity * price_per_unit * 100) / 100;
+      }
+
+      const saveBtn = document.getElementById('btn-save-edit-buy');
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> กำลังบันทึก...';
+      }
+
+      const res = await apiRequest(`/api/buys/${buyId}`, 'PUT', {
+        doc_date,
+        doc_no,
+        shop_name,
+        item_code,
+        quantity,
+        price_per_unit,
+        total_price,
+        remark
+      });
+
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk mr-1"></i><span>บันทึกการแก้ไข</span>';
+      }
+
+      if (res.ok && res.data.success) {
+        showToast(res.data.message || 'แก้ไขข้อมูลรับเข้าพัสดุเรียบร้อยแล้ว', 'success');
+        closeModal('buy-edit-modal');
+        loadRecentBuys(state.buysPagination.page);
+        loadStockBalance(true);
+      } else {
+        showToast(res.data.message || 'ไม่สามารถแก้ไขข้อมูลได้', 'error');
+      }
+    });
+  }
+
   // 7. Pay Module Form Events, Two-Way Math & Pull Buy Modal
   const payQty = document.getElementById('pay-qty');
   const payPrice = document.getElementById('pay-price');
@@ -3270,6 +3646,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const btnPayClearItem = document.getElementById('btn-pay-clear-item');
   if (btnPayClearItem) btnPayClearItem.addEventListener('click', clearPayItemInputs);
+
+  // Pay History Toggle Buttons
+  const btnTogglePays = document.getElementById('btn-toggle-pays-history');
+  if (btnTogglePays) btnTogglePays.addEventListener('click', () => togglePaysHistory());
+
+  const btnShowPays = document.getElementById('btn-show-pays-history');
+  if (btnShowPays) btnShowPays.addEventListener('click', () => togglePaysHistory(true));
 
   // Pull Buy Bill Buttons
   const btnOpenPullBuy = document.getElementById('btn-open-pull-buy');
@@ -3387,6 +3770,60 @@ document.addEventListener('DOMContentLoaded', async () => {
       showToast(res.data.message || 'บันทึกเบิกจ่ายล้มเหลว', 'error');
     }
   });
+
+  // Edit Pay Modal Form Submission
+  const formEditPay = document.getElementById('form-edit-pay-modal');
+  if (formEditPay) {
+    formEditPay.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const payId = document.getElementById('edit-pay-id').value;
+      const doc_date = document.getElementById('edit-pay-doc-date').value;
+      const doc_no = document.getElementById('edit-pay-doc-no').value.trim();
+      const department = document.getElementById('edit-pay-department').value.trim();
+      const item_code = document.getElementById('edit-pay-item-code').value;
+      const quantity = parseFloat(document.getElementById('edit-pay-qty').value) || 0;
+      let price_per_unit = parseFloat(document.getElementById('edit-pay-price').value) || 0;
+      let total_price = parseFloat(document.getElementById('edit-pay-total-price').value) || 0;
+      const remark = document.getElementById('edit-pay-remark').value.trim();
+
+      if (total_price > 0 && price_per_unit === 0) {
+        price_per_unit = Math.round((total_price / quantity) * 10000) / 10000;
+      } else if (price_per_unit > 0 && total_price === 0) {
+        total_price = Math.round(quantity * price_per_unit * 100) / 100;
+      }
+
+      const saveBtn = document.getElementById('btn-save-edit-pay');
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-1"></i> กำลังบันทึก...';
+      }
+
+      const res = await apiRequest(`/api/pays/${payId}`, 'PUT', {
+        doc_date,
+        doc_no,
+        department,
+        item_code,
+        quantity,
+        price_per_unit,
+        total_price,
+        remark
+      });
+
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk mr-1"></i><span>บันทึกการแก้ไข</span>';
+      }
+
+      if (res.ok && res.data.success) {
+        showToast(res.data.message || 'แก้ไขข้อมูลเบิกจ่ายพัสดุเรียบร้อยแล้ว', 'success');
+        closeModal('pay-edit-modal');
+        loadRecentPays(state.paysPagination.page);
+        loadStockBalance(true);
+      } else {
+        showToast(res.data.message || 'ไม่สามารถแก้ไขข้อมูลได้', 'error');
+      }
+    });
+  }
 
   // User Management: Edit User Form Submission
   const formUserEdit = document.getElementById('form-user-edit');
@@ -3921,3 +4358,17 @@ function editShopModal(shop) {
   document.getElementById('modal-shop-tax').value = shop.tax_id || '';
   openModal('shop-modal');
 }
+
+// Expose modal and action functions to window for inline onclick handlers
+window.openEditBuyModal = openEditBuyModal;
+window.confirmDeleteBuy = confirmDeleteBuy;
+window.toggleBuysHistory = toggleBuysHistory;
+window.openEditPayModal = openEditPayModal;
+window.confirmDeletePay = confirmDeletePay;
+window.togglePaysHistory = togglePaysHistory;
+window.selectPayItem = selectPayItem;
+window.removePayCartItem = removePayCartItem;
+window.removeBuyCartItem = removeBuyCartItem;
+window.editItemModal = editItemModal;
+window.editShopModal = editShopModal;
+
