@@ -1,0 +1,17 @@
+[
+  "seed_shops.sql",
+  "seed_items_part_1.sql",
+  "seed_items_part_2.sql",
+  "seed_items_part_3.sql",
+  "clear_buys_pays.sql",
+  "seed_buys_part_1.sql",
+  "seed_buys_part_2.sql",
+  "seed_buys_part_3.sql",
+  "seed_buys_part_4.sql",
+  "seed_pays_part_1.sql",
+  "seed_pays_part_2.sql",
+  "seed_pays_part_3.sql",
+  "seed_pays_part_4.sql",
+  "seed_pays_part_5.sql",
+  "recalculate_balances.sql"
+]
