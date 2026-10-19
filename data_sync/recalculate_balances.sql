@@ -5,16 +5,19 @@ INSERT OR REPLACE INTO item_balances (
 )
 SELECT 
   i.item_code,
-  COALESCE(b.in_qty, 0),
-  COALESCE(b.in_val, 0),
-  COALESCE(p.out_qty, 0),
-  COALESCE(p.out_val, 0),
+  ROUND(COALESCE(b.in_qty, 0), 2),
+  ROUND(COALESCE(b.in_val, 0), 2),
+  ROUND(COALESCE(p.out_qty, 0), 2),
+  ROUND(COALESCE(p.out_val, 0), 2),
   ROUND(COALESCE(b.in_qty, 0) - COALESCE(p.out_qty, 0), 2),
   CASE WHEN COALESCE(b.in_qty, 0) > 0 THEN ROUND(COALESCE(b.in_val, 0) / COALESCE(b.in_qty, 0), 2) ELSE 0 END,
-  ROUND((COALESCE(b.in_qty, 0) - COALESCE(p.out_qty, 0)) * (CASE WHEN COALESCE(b.in_qty, 0) > 0 THEN (COALESCE(b.in_val, 0) / COALESCE(b.in_qty, 0)) ELSE 0 END), 2),
   CASE 
-    WHEN (COALESCE(b.in_qty, 0) - COALESCE(p.out_qty, 0)) <= 0 THEN 'OUT_OF_STOCK'
-    WHEN (COALESCE(b.in_qty, 0) - COALESCE(p.out_qty, 0)) <= i.min_stock THEN 'LOW_STOCK'
+    WHEN ROUND(COALESCE(b.in_qty, 0) - COALESCE(p.out_qty, 0), 2) <= 0 THEN 0
+    ELSE ROUND(ROUND(COALESCE(b.in_qty, 0) - COALESCE(p.out_qty, 0), 2) * (CASE WHEN COALESCE(b.in_qty, 0) > 0 THEN (COALESCE(b.in_val, 0) / COALESCE(b.in_qty, 0)) ELSE 0 END), 2)
+  END,
+  CASE 
+    WHEN ROUND(COALESCE(b.in_qty, 0) - COALESCE(p.out_qty, 0), 2) <= 0 THEN 'OUT_OF_STOCK'
+    WHEN ROUND(COALESCE(b.in_qty, 0) - COALESCE(p.out_qty, 0), 2) <= i.min_stock THEN 'LOW_STOCK'
     ELSE 'NORMAL'
   END,
   b.last_buy,

@@ -208,7 +208,8 @@ async function main() {
       const cat = cleanSqlStr(b['กลุ่มสินค้า'] || 'ทั่วไป');
       const u = cleanSqlStr(b['หน่วยนับ'] || 'หน่วย');
       const price = cleanNum(b['ราคา']);
-      const qty = cleanNum(b['จำนวนที่ซื้อ']);
+      let qty = cleanNum(b['จำนวนที่ซื้อ']);
+      qty = Math.round(qty * 100) / 100;
       let total = cleanNum(b['มูลค่ารวม']);
       if (total <= 0 && qty > 0 && price > 0) {
         total = Math.round(qty * price * 100) / 100;
@@ -244,10 +245,15 @@ async function main() {
       const cat = cleanSqlStr(p['กลุ่มสินค้า'] || 'ทั่วไป');
       const u = cleanSqlStr(p['หน่วยนับ'] || 'หน่วย');
       const price = cleanNum(p['ราคา']);
-      const qty = cleanNum(p['จำนวนที่จ่าย']);
+      let qty = cleanNum(p['จำนวนที่จ่าย']);
       let total = cleanNum(p['มูลค่ารวม']);
       if (total <= 0 && qty > 0 && price > 0) {
         total = Math.round(qty * price * 100) / 100;
+      }
+      if (price > 0 && total > 0 && (code === 'ช0001' || Math.abs(qty - (total / price)) > 0.005)) {
+        qty = Math.round((total / price) * 100) / 100;
+      } else {
+        qty = Math.round(qty * 100) / 100;
       }
       const dept = p['หน่วยงานที่เบิก'] && p['หน่วยงานที่เบิก'].trim() ? cleanSqlStr(p['หน่วยงานที่เบิก']) : cleanSqlStr('หน่วยงานทั่วไป');
       const rem = cleanSqlStr(p['หมายเหตุ'] || '');

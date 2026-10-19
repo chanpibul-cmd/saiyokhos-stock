@@ -1,0 +1,6 @@
+node_modules/
+.wrangler/
+*.log
+*.xls
+data_sync/*.csv
+data_sync/*.sql
